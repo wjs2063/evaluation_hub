@@ -1,0 +1,4 @@
+input,actual_output,expected_output
+대한민국의 수도는 어디인가요?,서울입니다.,서울입니다.
+2 더하기 2는?,4,4
+FastAPI는 어떤 언어의 프레임워크인가요?,파이썬 웹 프레임워크입니다.,Python 웹 프레임워크입니다.

@@ -1,0 +1,94 @@
+services:
+  db:
+    restart: "no"
+
+  adminer:
+    image: adminer
+    restart: "no"
+    depends_on:
+      - db
+    environment:
+      ADMINER_DESIGN: pepa-linha-dark
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  prestart:
+    environment:
+      POSTGRES_SERVER: db
+      SMTP_HOST: mailcatcher
+      SMTP_PORT: "1025"
+      SMTP_TLS: "false"
+      EMAILS_FROM_EMAIL: noreply@example.com
+
+  backend:
+    restart: "no"
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command:
+      - fastapi
+      - run
+      - --reload
+      - app/main.py
+    develop:
+      watch:
+        - path: ./backend
+          action: sync
+          target: /app/backend
+          ignore:
+            - ./backend/.venv
+            - .venv
+        - path: ./backend/pyproject.toml
+          action: rebuild
+    volumes:
+      - ./backend/htmlcov:/app/backend/htmlcov
+    environment:
+      POSTGRES_SERVER: db
+      SMTP_HOST: mailcatcher
+      SMTP_PORT: "1025"
+      SMTP_TLS: "false"
+      EMAILS_FROM_EMAIL: noreply@example.com
+
+  mailcatcher:
+    image: schickling/mailcatcher
+    ports:
+      - "127.0.0.1:1080:1080"
+      - "127.0.0.1:1025:1025"
+
+  frontend:
+    restart: "no"
+    ports: !override
+      - "127.0.0.1:5173:80"
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_APP_ENV: ${ENVIRONMENT-local}
+        NODE_ENV: development
+
+  playwright:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.playwright
+      args:
+        VITE_API_URL: http://backend:8000
+        VITE_APP_ENV: ${ENVIRONMENT-local}
+        NODE_ENV: production
+    ipc: host
+    depends_on:
+      - backend
+      - mailcatcher
+    env_file:
+      - .env
+    environment:
+      VITE_API_URL: http://backend:8000
+      VITE_APP_ENV: ${ENVIRONMENT-local}
+      MAILCATCHER_HOST: http://mailcatcher:1080
+      PLAYWRIGHT_HTML_HOST: 0.0.0.0
+      CI: ${CI:-}
+    volumes:
+      - ./frontend/blob-report:/app/frontend/blob-report
+      - ./frontend/test-results:/app/frontend/test-results
+    ports:
+      - "127.0.0.1:9323:9323"

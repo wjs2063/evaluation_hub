@@ -1,0 +1,45 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - master
+
+permissions: {}
+
+jobs:
+  deploy:
+    environment: staging
+    # Do not deploy in the main repository, only in user projects
+    if: github.repository_owner != 'fastapi'
+    runs-on:
+      - self-hosted
+      - staging
+    env:
+      ENVIRONMENT: staging
+      COMPOSE_PROFILES: ${{ vars.COMPOSE_PROFILES || 'db,backend,frontend' }}
+      FRONTEND_HOST: ${{ vars.FRONTEND_HOST }}
+      BACKEND_UPSTREAM: ${{ vars.BACKEND_UPSTREAM || 'http://backend:8000' }}
+      POSTGRES_SERVER: ${{ vars.POSTGRES_SERVER || 'db' }}
+      DB_BIND_ADDRESS: ${{ vars.DB_BIND_ADDRESS || '127.0.0.1' }}
+      BACKEND_BIND_ADDRESS: ${{ vars.BACKEND_BIND_ADDRESS || '127.0.0.1' }}
+      FRONTEND_BIND_ADDRESS: ${{ vars.FRONTEND_BIND_ADDRESS || '0.0.0.0' }}
+      VITE_API_URL: ${{ vars.VITE_API_URL }}
+      BACKEND_CORS_ORIGINS: ${{ vars.BACKEND_CORS_ORIGINS }}
+      STACK_NAME: ${{ secrets.STACK_NAME_STAGING }}
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      FIRST_SUPERUSER: ${{ secrets.FIRST_SUPERUSER }}
+      FIRST_SUPERUSER_PASSWORD: ${{ secrets.FIRST_SUPERUSER_PASSWORD }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAILS_FROM_EMAIL: ${{ secrets.EMAILS_FROM_EMAIL }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - run: docker compose -f compose.yml --project-name ${{ secrets.STACK_NAME_STAGING }} build
+      - run: docker compose -f compose.yml --project-name ${{ secrets.STACK_NAME_STAGING }} up -d
