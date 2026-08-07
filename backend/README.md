@@ -19,6 +19,22 @@ From `./backend/` you can install all the dependencies with:
 $ uv sync
 ```
 
+## Local development server
+
+From the `backend/` directory, start the FastAPI development server with:
+
+```bash
+uv run fastapi dev app/main.py
+```
+
+The server reloads automatically when you change the code. Open
+<http://localhost:8000> in your browser; the interactive API documentation is
+available at <http://localhost:8000/docs>.
+
+Before using API endpoints that require the database, make sure the root
+`.env` file is configured and a local PostgreSQL instance is running with the
+matching settings.
+
 Then you can activate the virtual environment with:
 
 ```console

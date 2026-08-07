@@ -16,9 +16,18 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
 import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
+import { Route as LayoutEvaluationMultiTurnRouteImport } from './routes/_layout/evaluation-multi-turn'
+import { Route as LayoutEvaluationRagRouteImport } from './routes/_layout/evaluation-rag'
+import { Route as LayoutEvaluationSingleTurnRouteImport } from './routes/_layout/evaluation-single-turn'
 import { Route as LayoutEvaluationsRouteImport } from './routes/_layout/evaluations'
 import { Route as LayoutItemsRouteImport } from './routes/_layout/items'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
+import { Route as LayoutEvaluationMultiTurnIndexRouteImport } from './routes/_layout/evaluation-multi-turn.index'
+import { Route as LayoutEvaluationMultiTurnLiveTestRouteImport } from './routes/_layout/evaluation-multi-turn.live-test'
+import { Route as LayoutEvaluationMultiTurnRegressionRouteImport } from './routes/_layout/evaluation-multi-turn.regression'
+import { Route as LayoutEvaluationSingleTurnIndexRouteImport } from './routes/_layout/evaluation-single-turn.index'
+import { Route as LayoutEvaluationSingleTurnLiveTestRouteImport } from './routes/_layout/evaluation-single-turn.live-test'
+import { Route as LayoutEvaluationSingleTurnRegressionRouteImport } from './routes/_layout/evaluation-single-turn.regression'
 
 const LayoutRoute = LayoutRouteImport.update({
   id: '/_layout',
@@ -54,6 +63,23 @@ const LayoutAdminRoute = LayoutAdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutEvaluationMultiTurnRoute =
+  LayoutEvaluationMultiTurnRouteImport.update({
+    id: '/evaluation-multi-turn',
+    path: '/evaluation-multi-turn',
+    getParentRoute: () => LayoutRoute,
+  } as any)
+const LayoutEvaluationRagRoute = LayoutEvaluationRagRouteImport.update({
+  id: '/evaluation-rag',
+  path: '/evaluation-rag',
+  getParentRoute: () => LayoutRoute,
+} as any)
+const LayoutEvaluationSingleTurnRoute =
+  LayoutEvaluationSingleTurnRouteImport.update({
+    id: '/evaluation-single-turn',
+    path: '/evaluation-single-turn',
+    getParentRoute: () => LayoutRoute,
+  } as any)
 const LayoutEvaluationsRoute = LayoutEvaluationsRouteImport.update({
   id: '/evaluations',
   path: '/evaluations',
@@ -69,6 +95,42 @@ const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutEvaluationMultiTurnIndexRoute =
+  LayoutEvaluationMultiTurnIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => LayoutEvaluationMultiTurnRoute,
+  } as any)
+const LayoutEvaluationMultiTurnLiveTestRoute =
+  LayoutEvaluationMultiTurnLiveTestRouteImport.update({
+    id: '/live-test',
+    path: '/live-test',
+    getParentRoute: () => LayoutEvaluationMultiTurnRoute,
+  } as any)
+const LayoutEvaluationMultiTurnRegressionRoute =
+  LayoutEvaluationMultiTurnRegressionRouteImport.update({
+    id: '/regression',
+    path: '/regression',
+    getParentRoute: () => LayoutEvaluationMultiTurnRoute,
+  } as any)
+const LayoutEvaluationSingleTurnIndexRoute =
+  LayoutEvaluationSingleTurnIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => LayoutEvaluationSingleTurnRoute,
+  } as any)
+const LayoutEvaluationSingleTurnLiveTestRoute =
+  LayoutEvaluationSingleTurnLiveTestRouteImport.update({
+    id: '/live-test',
+    path: '/live-test',
+    getParentRoute: () => LayoutEvaluationSingleTurnRoute,
+  } as any)
+const LayoutEvaluationSingleTurnRegressionRoute =
+  LayoutEvaluationSingleTurnRegressionRouteImport.update({
+    id: '/regression',
+    path: '/regression',
+    getParentRoute: () => LayoutEvaluationSingleTurnRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
@@ -77,9 +139,18 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/admin': typeof LayoutAdminRoute
+  '/evaluation-multi-turn': typeof LayoutEvaluationMultiTurnRouteWithChildren
+  '/evaluation-rag': typeof LayoutEvaluationRagRoute
+  '/evaluation-single-turn': typeof LayoutEvaluationSingleTurnRouteWithChildren
   '/evaluations': typeof LayoutEvaluationsRoute
   '/items': typeof LayoutItemsRoute
   '/settings': typeof LayoutSettingsRoute
+  '/evaluation-multi-turn/live-test': typeof LayoutEvaluationMultiTurnLiveTestRoute
+  '/evaluation-multi-turn/regression': typeof LayoutEvaluationMultiTurnRegressionRoute
+  '/evaluation-single-turn/live-test': typeof LayoutEvaluationSingleTurnLiveTestRoute
+  '/evaluation-single-turn/regression': typeof LayoutEvaluationSingleTurnRegressionRoute
+  '/evaluation-multi-turn/': typeof LayoutEvaluationMultiTurnIndexRoute
+  '/evaluation-single-turn/': typeof LayoutEvaluationSingleTurnIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -87,10 +158,17 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/admin': typeof LayoutAdminRoute
+  '/evaluation-rag': typeof LayoutEvaluationRagRoute
   '/evaluations': typeof LayoutEvaluationsRoute
   '/items': typeof LayoutItemsRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
+  '/evaluation-multi-turn/live-test': typeof LayoutEvaluationMultiTurnLiveTestRoute
+  '/evaluation-multi-turn/regression': typeof LayoutEvaluationMultiTurnRegressionRoute
+  '/evaluation-single-turn/live-test': typeof LayoutEvaluationSingleTurnLiveTestRoute
+  '/evaluation-single-turn/regression': typeof LayoutEvaluationSingleTurnRegressionRoute
+  '/evaluation-multi-turn': typeof LayoutEvaluationMultiTurnIndexRoute
+  '/evaluation-single-turn': typeof LayoutEvaluationSingleTurnIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -100,10 +178,19 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/_layout/admin': typeof LayoutAdminRoute
+  '/_layout/evaluation-multi-turn': typeof LayoutEvaluationMultiTurnRouteWithChildren
+  '/_layout/evaluation-rag': typeof LayoutEvaluationRagRoute
+  '/_layout/evaluation-single-turn': typeof LayoutEvaluationSingleTurnRouteWithChildren
   '/_layout/evaluations': typeof LayoutEvaluationsRoute
   '/_layout/items': typeof LayoutItemsRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/_layout/evaluation-multi-turn/live-test': typeof LayoutEvaluationMultiTurnLiveTestRoute
+  '/_layout/evaluation-multi-turn/regression': typeof LayoutEvaluationMultiTurnRegressionRoute
+  '/_layout/evaluation-single-turn/live-test': typeof LayoutEvaluationSingleTurnLiveTestRoute
+  '/_layout/evaluation-single-turn/regression': typeof LayoutEvaluationSingleTurnRegressionRoute
+  '/_layout/evaluation-multi-turn/': typeof LayoutEvaluationMultiTurnIndexRoute
+  '/_layout/evaluation-single-turn/': typeof LayoutEvaluationSingleTurnIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -114,9 +201,18 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/admin'
+    | '/evaluation-multi-turn'
+    | '/evaluation-rag'
+    | '/evaluation-single-turn'
     | '/evaluations'
     | '/items'
     | '/settings'
+    | '/evaluation-multi-turn/live-test'
+    | '/evaluation-multi-turn/regression'
+    | '/evaluation-single-turn/live-test'
+    | '/evaluation-single-turn/regression'
+    | '/evaluation-multi-turn/'
+    | '/evaluation-single-turn/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -124,10 +220,17 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/admin'
+    | '/evaluation-rag'
     | '/evaluations'
     | '/items'
     | '/settings'
     | '/'
+    | '/evaluation-multi-turn/live-test'
+    | '/evaluation-multi-turn/regression'
+    | '/evaluation-single-turn/live-test'
+    | '/evaluation-single-turn/regression'
+    | '/evaluation-multi-turn'
+    | '/evaluation-single-turn'
   id:
     | '__root__'
     | '/_layout'
@@ -136,10 +239,19 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/_layout/admin'
+    | '/_layout/evaluation-multi-turn'
+    | '/_layout/evaluation-rag'
+    | '/_layout/evaluation-single-turn'
     | '/_layout/evaluations'
     | '/_layout/items'
     | '/_layout/settings'
     | '/_layout/'
+    | '/_layout/evaluation-multi-turn/live-test'
+    | '/_layout/evaluation-multi-turn/regression'
+    | '/_layout/evaluation-single-turn/live-test'
+    | '/_layout/evaluation-single-turn/regression'
+    | '/_layout/evaluation-multi-turn/'
+    | '/_layout/evaluation-single-turn/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -201,6 +313,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutAdminRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/evaluation-multi-turn': {
+      id: '/_layout/evaluation-multi-turn'
+      path: '/evaluation-multi-turn'
+      fullPath: '/evaluation-multi-turn'
+      preLoaderRoute: typeof LayoutEvaluationMultiTurnRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/evaluation-rag': {
+      id: '/_layout/evaluation-rag'
+      path: '/evaluation-rag'
+      fullPath: '/evaluation-rag'
+      preLoaderRoute: typeof LayoutEvaluationRagRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/evaluation-single-turn': {
+      id: '/_layout/evaluation-single-turn'
+      path: '/evaluation-single-turn'
+      fullPath: '/evaluation-single-turn'
+      preLoaderRoute: typeof LayoutEvaluationSingleTurnRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/evaluations': {
       id: '/_layout/evaluations'
       path: '/evaluations'
@@ -222,11 +355,96 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutSettingsRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/evaluation-multi-turn/': {
+      id: '/_layout/evaluation-multi-turn/'
+      path: '/'
+      fullPath: '/evaluation-multi-turn/'
+      preLoaderRoute: typeof LayoutEvaluationMultiTurnIndexRouteImport
+      parentRoute: typeof LayoutEvaluationMultiTurnRoute
+    }
+    '/_layout/evaluation-multi-turn/live-test': {
+      id: '/_layout/evaluation-multi-turn/live-test'
+      path: '/live-test'
+      fullPath: '/evaluation-multi-turn/live-test'
+      preLoaderRoute: typeof LayoutEvaluationMultiTurnLiveTestRouteImport
+      parentRoute: typeof LayoutEvaluationMultiTurnRoute
+    }
+    '/_layout/evaluation-multi-turn/regression': {
+      id: '/_layout/evaluation-multi-turn/regression'
+      path: '/regression'
+      fullPath: '/evaluation-multi-turn/regression'
+      preLoaderRoute: typeof LayoutEvaluationMultiTurnRegressionRouteImport
+      parentRoute: typeof LayoutEvaluationMultiTurnRoute
+    }
+    '/_layout/evaluation-single-turn/': {
+      id: '/_layout/evaluation-single-turn/'
+      path: '/'
+      fullPath: '/evaluation-single-turn/'
+      preLoaderRoute: typeof LayoutEvaluationSingleTurnIndexRouteImport
+      parentRoute: typeof LayoutEvaluationSingleTurnRoute
+    }
+    '/_layout/evaluation-single-turn/live-test': {
+      id: '/_layout/evaluation-single-turn/live-test'
+      path: '/live-test'
+      fullPath: '/evaluation-single-turn/live-test'
+      preLoaderRoute: typeof LayoutEvaluationSingleTurnLiveTestRouteImport
+      parentRoute: typeof LayoutEvaluationSingleTurnRoute
+    }
+    '/_layout/evaluation-single-turn/regression': {
+      id: '/_layout/evaluation-single-turn/regression'
+      path: '/regression'
+      fullPath: '/evaluation-single-turn/regression'
+      preLoaderRoute: typeof LayoutEvaluationSingleTurnRegressionRouteImport
+      parentRoute: typeof LayoutEvaluationSingleTurnRoute
+    }
   }
 }
 
+interface LayoutEvaluationMultiTurnRouteChildren {
+  LayoutEvaluationMultiTurnLiveTestRoute: typeof LayoutEvaluationMultiTurnLiveTestRoute
+  LayoutEvaluationMultiTurnRegressionRoute: typeof LayoutEvaluationMultiTurnRegressionRoute
+  LayoutEvaluationMultiTurnIndexRoute: typeof LayoutEvaluationMultiTurnIndexRoute
+}
+
+const LayoutEvaluationMultiTurnRouteChildren: LayoutEvaluationMultiTurnRouteChildren =
+  {
+    LayoutEvaluationMultiTurnLiveTestRoute:
+      LayoutEvaluationMultiTurnLiveTestRoute,
+    LayoutEvaluationMultiTurnRegressionRoute:
+      LayoutEvaluationMultiTurnRegressionRoute,
+    LayoutEvaluationMultiTurnIndexRoute: LayoutEvaluationMultiTurnIndexRoute,
+  }
+
+const LayoutEvaluationMultiTurnRouteWithChildren =
+  LayoutEvaluationMultiTurnRoute._addFileChildren(
+    LayoutEvaluationMultiTurnRouteChildren,
+  )
+
+interface LayoutEvaluationSingleTurnRouteChildren {
+  LayoutEvaluationSingleTurnLiveTestRoute: typeof LayoutEvaluationSingleTurnLiveTestRoute
+  LayoutEvaluationSingleTurnRegressionRoute: typeof LayoutEvaluationSingleTurnRegressionRoute
+  LayoutEvaluationSingleTurnIndexRoute: typeof LayoutEvaluationSingleTurnIndexRoute
+}
+
+const LayoutEvaluationSingleTurnRouteChildren: LayoutEvaluationSingleTurnRouteChildren =
+  {
+    LayoutEvaluationSingleTurnLiveTestRoute:
+      LayoutEvaluationSingleTurnLiveTestRoute,
+    LayoutEvaluationSingleTurnRegressionRoute:
+      LayoutEvaluationSingleTurnRegressionRoute,
+    LayoutEvaluationSingleTurnIndexRoute: LayoutEvaluationSingleTurnIndexRoute,
+  }
+
+const LayoutEvaluationSingleTurnRouteWithChildren =
+  LayoutEvaluationSingleTurnRoute._addFileChildren(
+    LayoutEvaluationSingleTurnRouteChildren,
+  )
+
 interface LayoutRouteChildren {
   LayoutAdminRoute: typeof LayoutAdminRoute
+  LayoutEvaluationMultiTurnRoute: typeof LayoutEvaluationMultiTurnRouteWithChildren
+  LayoutEvaluationRagRoute: typeof LayoutEvaluationRagRoute
+  LayoutEvaluationSingleTurnRoute: typeof LayoutEvaluationSingleTurnRouteWithChildren
   LayoutEvaluationsRoute: typeof LayoutEvaluationsRoute
   LayoutItemsRoute: typeof LayoutItemsRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
@@ -235,6 +453,9 @@ interface LayoutRouteChildren {
 
 const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminRoute: LayoutAdminRoute,
+  LayoutEvaluationMultiTurnRoute: LayoutEvaluationMultiTurnRouteWithChildren,
+  LayoutEvaluationRagRoute: LayoutEvaluationRagRoute,
+  LayoutEvaluationSingleTurnRoute: LayoutEvaluationSingleTurnRouteWithChildren,
   LayoutEvaluationsRoute: LayoutEvaluationsRoute,
   LayoutItemsRoute: LayoutItemsRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,

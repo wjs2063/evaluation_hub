@@ -30,14 +30,27 @@ function Layout() {
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
-  const pageName =
-    {
-      "/": "Overview",
-      "/evaluations": "Evaluations",
-      "/items": "Items",
-      "/admin": "Users",
-      "/settings": "Settings",
-    }[pathname] || "Console"
+  const pageName = pathname.startsWith("/evaluation-single-turn/live-test")
+    ? "라이브 API 테스트"
+    : pathname.startsWith("/evaluation-single-turn/regression")
+      ? "회귀 평가"
+      : pathname.startsWith("/evaluation-single-turn")
+        ? "Single-turn Evaluation"
+        : pathname.startsWith("/evaluation-multi-turn/live-test")
+          ? "멀티턴 라이브 API 테스트"
+          : pathname.startsWith("/evaluation-multi-turn/regression")
+            ? "멀티턴 회귀 평가"
+            : pathname.startsWith("/evaluation-multi-turn")
+              ? "멀티턴 평가"
+              : pathname.startsWith("/evaluation-rag")
+                ? "RAG 테스트 (준비 중)"
+                : {
+                    "/": "Overview",
+                    "/evaluations": "Evaluations",
+                    "/items": "Items",
+                    "/admin": "Users",
+                    "/settings": "Settings",
+                  }[pathname] || "Console"
 
   return (
     <SidebarProvider>

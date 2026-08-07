@@ -5,6 +5,7 @@ import { Suspense } from "react"
 import { type UserPublic, UsersService } from "@/client"
 import AddUser from "@/components/Admin/AddUser"
 import { columns, type UserTableData } from "@/components/Admin/columns"
+import { EvaluationEndpoints } from "@/components/Admin/EvaluationEndpoints"
 import { DataTable } from "@/components/Common/DataTable"
 import { PageHeader } from "@/components/Common/PageHeader"
 import PendingUsers from "@/components/Pending/PendingUsers"
@@ -76,6 +77,7 @@ function Admin() {
           <UsersTable />
         </div>
       </div>
+      <EvaluationEndpoints />
     </div>
   )
 }

@@ -1,4 +1,44 @@
-from app.api.routes.evaluations import _evaluate_row, parse_dataset
+import asyncio
+import importlib.util
+import os
+import socket
+import uuid
+
+import pytest
+from deepeval.test_case import MultiTurnParams
+from fastapi import HTTPException
+from pydantic import SecretStr
+
+from app.api.routes import evaluations
+from app.api.routes.evaluations import (
+    _assert_url_allowed,
+    _call_endpoint,
+    _conversation_user_content,
+    _deepeval_conversation,
+    _evaluate_row,
+    _import_rows,
+    _openai_api_key,
+    _overall_conversation_result,
+    _replace_variables,
+    _require_deepeval,
+    _saved_run,
+    _scenario_run,
+    _validate_external_url,
+    create_endpoint,
+    create_scenario,
+    parse_dataset,
+    settings,
+)
+from app.core.security import decrypt_evaluation_headers, encrypt_evaluation_headers
+from app.models import (
+    EvaluationEndpoint,
+    EvaluationEndpointCreate,
+    EvaluationRun,
+    EvaluationRunRow,
+    EvaluationScenarioCreate,
+    EvaluationScenarioRun,
+    EvaluationScenarioRunTurn,
+)
 
 
 def test_parse_csv_dataset() -> None:
@@ -14,10 +54,345 @@ def test_parse_csv_dataset() -> None:
 
 def test_exact_match_passes() -> None:
     result = _evaluate_row(
-        {"input": "greeting", "actual_output": " Hello  world ", "expected_output": "hello world"},
+        {
+            "input": "greeting",
+            "actual_output": " Hello  world ",
+            "expected_output": "hello world",
+        },
         index=0,
         threshold=0.7,
     )
 
     assert result.passed is True
     assert result.score == 1
+
+
+def test_import_json_dataset_accepts_data_envelope() -> None:
+    rows = _import_rows(
+        "dataset.json",
+        b'{"data": [{"input": "hello", "expected_output": "world"}]}',
+    )
+
+    assert len(rows) == 1
+    assert rows[0].input == "hello"
+
+
+def test_import_json_dataset_rejects_missing_expected_output() -> None:
+    with pytest.raises(HTTPException, match="expected_output"):
+        _import_rows("dataset.json", b'[{"input": "hello"}]')
+
+
+def test_saved_run_serializes_metrics_once() -> None:
+    run = EvaluationRun(dataset_id=uuid.uuid4(), owner_id=uuid.uuid4())
+    row = EvaluationRunRow(
+        run_id=run.id,
+        input="hello",
+        expected_output="world",
+        actual_output="world",
+        metrics=[{"name": "exact_match", "score": 1.0}],
+    )
+
+    result = _saved_run(run, [row])
+
+    assert result.created_at == run.created_at.isoformat()
+    assert result.rows[0].metrics[0].name == "exact_match"
+
+
+@pytest.mark.parametrize(
+    "url", ["http://localhost:9001/chat", "http://127.0.0.1:9001/chat"]
+)
+def test_local_endpoint_accepts_http_and_loopback_urls(url: str) -> None:
+    assert _validate_external_url(url) == url
+
+
+def test_deepeval_reads_api_key_from_settings_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", SecretStr("from-dotenv"))
+    monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+
+    _require_deepeval()
+
+    assert _openai_api_key() == "from-dotenv"
+    assert os.environ["OPENAI_API_KEY"] == "from-dotenv"
+
+
+def test_conversational_deepeval_includes_role_and_content_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Metric:
+        score = 0.8
+        reason = "Looks coherent"
+
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        def measure(self, _test_case: object) -> None:
+            return None
+
+    monkeypatch.setattr(evaluations, "_require_deepeval", lambda: None)
+    monkeypatch.setattr("deepeval.metrics.ConversationalGEval", Metric)
+
+    score, reason = _deepeval_conversation(
+        [("user", "Hello"), ("assistant", "Hi")], threshold=0.7
+    )
+
+    assert (score, reason) == (0.8, "Looks coherent")
+    assert captured["evaluation_params"] == [
+        MultiTurnParams.ROLE,
+        MultiTurnParams.CONTENT,
+    ]
+    assert "한국어" in str(captured["criteria"])
+
+
+def test_create_local_http_endpoint() -> None:
+    class Session:
+        def __init__(self) -> None:
+            self.added: list[EvaluationEndpoint] = []
+
+        def add(self, endpoint: EvaluationEndpoint) -> None:
+            self.added.append(endpoint)
+
+        async def commit(self) -> None:
+            return None
+
+        async def refresh(self, _endpoint: EvaluationEndpoint) -> None:
+            return None
+
+    session = Session()
+    endpoint = asyncio.run(
+        create_endpoint(
+            EvaluationEndpointCreate(
+                name="Local ChatOpenAI",
+                base_url="http://localhost:9001/chat",
+            ),
+            session,  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+        )
+    )
+
+    assert endpoint.base_url == "http://localhost:9001/chat"
+    assert session.added[0].base_url == endpoint.base_url
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://example.com", "https://localhost/api", "https://127.0.0.1/api"],
+)
+def test_non_local_endpoint_rejects_insecure_or_private_urls(
+    url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    with pytest.raises(HTTPException):
+        _validate_external_url(url)
+
+
+def test_scenario_url_must_match_allowed_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, None, ("8.8.8.8", 443))],
+    )
+    endpoint = EvaluationEndpoint(name="A", base_url="https://api.example.com")
+
+    assert _assert_url_allowed(endpoint, "https://api.example.com/v1/chat")
+    with pytest.raises(HTTPException, match="selected allowed server"):
+        _assert_url_allowed(endpoint, "https://other.example.com/v1/chat")
+
+
+def test_turn_variables_replace_previous_and_identifier_output() -> None:
+    result = _replace_variables(
+        {"previous": "{{previous_output}}", "first": "{{first_answer}}"},
+        {"previous_output": "one", "first_answer": "two"},
+    )
+
+    assert result == {"previous": "one", "first": "two"}
+
+
+def test_turn_variables_inject_structured_conversation_history() -> None:
+    history = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+    ]
+
+    result = _replace_variables(
+        {"message": "follow up", "history": "{{conversation_history}}"},
+        {"conversation_history": history},
+    )
+
+    assert result == {"message": "follow up", "history": history}
+
+
+def test_conversation_user_content_uses_message_instead_of_raw_json() -> None:
+    assert (
+        _conversation_user_content(
+            '{"message":"follow up","history":[{"role":"user","content":"first"}]}'
+        )
+        == "follow up"
+    )
+
+
+def test_overall_conversation_result_combines_scores_and_reasons() -> None:
+    score, passed, reason = _overall_conversation_result(
+        turn_average_score=0.8,
+        conversation_score=0.9,
+        conversation_reason="후속 응답이 이전 문맥을 유지했습니다.",
+        threshold=0.7,
+        passed_turns=2,
+        total_turns=2,
+        error=None,
+    )
+
+    assert score == 0.86
+    assert passed is True
+    assert "종합 86%" in reason
+    assert "턴별 정확성 80%" in reason
+    assert "대화 흐름 90%" in reason
+    assert "이전 문맥을 유지" in reason
+
+
+def test_overall_conversation_result_requires_every_quality_gate() -> None:
+    score, passed, _reason = _overall_conversation_result(
+        turn_average_score=0.8,
+        conversation_score=0.6,
+        conversation_reason="두 번째 응답이 첫 턴을 무시했습니다.",
+        threshold=0.7,
+        passed_turns=2,
+        total_turns=2,
+        error=None,
+    )
+
+    assert score == 0.68
+    assert passed is False
+
+
+def test_endpoint_headers_are_encrypted_at_rest() -> None:
+    encrypted = encrypt_evaluation_headers({"Authorization": "Bearer secret"})
+
+    assert "Bearer secret" not in encrypted
+    assert decrypt_evaluation_headers(encrypted) == {"Authorization": "Bearer secret"}
+
+
+def test_live_requests_are_always_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    received_method = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received_method
+        received_method = request.method
+        return httpx.Response(200, json={"answer": "ok"})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+
+    result = asyncio.run(
+        _call_endpoint(
+            "https://api.example.com/chat",
+            {},
+            '{"message":"{{input}}"}',
+            "answer",
+            {"input": "hello"},
+        )
+    )
+
+    assert received_method == "POST"
+    assert result[2] == "ok"
+
+
+def test_scenario_run_serializes_baseline_turn_comparison() -> None:
+    run = EvaluationScenarioRun(scenario_id=uuid.uuid4(), owner_id=uuid.uuid4())
+    baseline = EvaluationScenarioRunTurn(
+        run_id=uuid.uuid4(),
+        position=0,
+        identifier="answer",
+        actual_output="before",
+        score=0.4,
+    )
+    current = EvaluationScenarioRunTurn(
+        run_id=run.id, position=0, identifier="answer", actual_output="after", score=0.8
+    )
+
+    result = _scenario_run(run, [current], [baseline])
+
+    assert result.turns[0].baseline_actual_output == "before"
+    assert result.turns[0].output_changed is True
+    assert result.turns[0].score_delta == 0.4
+    assert result.overall_score == run.overall_score
+    assert result.conversation_score == run.geval_score
+
+
+def test_create_scenario_rejects_blank_endpoint_id_with_actionable_message() -> None:
+    scenario = EvaluationScenarioCreate.model_validate(
+        {
+            "name": "Missing endpoint",
+            "endpoint_id": "",
+            "evaluator": "local",
+            "turns": [{"identifier": "answer", "url": "https://api.example.com/chat"}],
+        }
+    )
+
+    with pytest.raises(HTTPException, match="administrator-managed A server") as error:
+        asyncio.run(create_scenario(scenario, None, None))  # type: ignore[arg-type]
+
+    assert error.value.status_code == 422
+
+
+def test_create_scenario_saves_valid_managed_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Session:
+        def __init__(self, endpoint: EvaluationEndpoint) -> None:
+            self.endpoint = endpoint
+            self.added: list[object] = []
+
+        async def get(self, _model: object, _id: uuid.UUID) -> EvaluationEndpoint:
+            return self.endpoint
+
+        def add(self, item: object) -> None:
+            self.added.append(item)
+
+        def add_all(self, items: list[object]) -> None:
+            self.added.extend(items)
+
+        async def flush(self) -> None:
+            return None
+
+        async def commit(self) -> None:
+            return None
+
+        async def refresh(self, _item: object) -> None:
+            return None
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(None, None, None, None, ("8.8.8.8", 443))],
+    )
+    endpoint = EvaluationEndpoint(name="A", base_url="https://api.example.com")
+    scenario = EvaluationScenarioCreate.model_validate(
+        {
+            "name": "Valid scenario",
+            "endpoint_id": str(endpoint.id),
+            "evaluator": "local",
+            "turns": [{"identifier": "answer", "url": "https://api.example.com/chat"}],
+        }
+    )
+    session = Session(endpoint)
+    user = type("User", (), {"id": uuid.uuid4(), "is_superuser": False})()
+
+    saved = asyncio.run(create_scenario(scenario, session, user))  # type: ignore[arg-type]
+
+    assert saved.endpoint_id == endpoint.id
+    assert saved.turn_count == 1

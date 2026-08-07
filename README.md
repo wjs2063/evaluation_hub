@@ -40,6 +40,10 @@ docker compose up --build
 
 로그인 후 사이드바의 **Evaluations**에서 [`examples/sample-evaluation.csv`](examples/sample-evaluation.csv)를 업로드하면 즉시 결과를 확인할 수 있습니다.
 
+멀티턴 Live Test의 연결 대상이 필요하면 [`examples/chat-openai-server`](examples/chat-openai-server)에서
+ChatOpenAI를 호출하는 최소 FastAPI 서버를 실행할 수 있습니다. `POST /chat`은
+`{"message": "..."}`를 받아 `{"answer": "..."}`를 반환합니다.
+
 ## 데이터셋 형식
 
 CSV 헤더 또는 JSON 객체에 다음 세 필드가 필요합니다.

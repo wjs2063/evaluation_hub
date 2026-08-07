@@ -1,4 +1,11 @@
-import { Boxes, FlaskConical, Gauge, UsersRound } from "lucide-react"
+import {
+  Boxes,
+  FlaskConical,
+  Gauge,
+  MessageSquareMore,
+  Network,
+  UsersRound,
+} from "lucide-react"
 
 import { SidebarAppearance } from "@/components/Common/Appearance"
 import { Logo } from "@/components/Common/Logo"
@@ -21,6 +28,42 @@ const baseItems: Item[] = [
     title: "Evaluations",
     path: "/evaluations",
     section: "Evaluate",
+    children: [
+      {
+        icon: MessageSquareMore,
+        title: "Single-turn",
+        path: "/evaluation-single-turn",
+        children: [
+          {
+            icon: Network,
+            title: "라이브 API 테스트",
+            path: "/evaluation-single-turn/live-test",
+          },
+          {
+            icon: FlaskConical,
+            title: "회귀 평가",
+            path: "/evaluation-single-turn/regression",
+          },
+        ],
+      },
+      {
+        icon: MessageSquareMore,
+        title: "Multi-turn",
+        path: "/evaluation-multi-turn",
+        children: [
+          {
+            icon: Network,
+            title: "라이브 API 테스트",
+            path: "/evaluation-multi-turn/live-test",
+          },
+          {
+            icon: FlaskConical,
+            title: "회귀 평가",
+            path: "/evaluation-multi-turn/regression",
+          },
+        ],
+      },
+    ],
   },
   { icon: Boxes, title: "Items", path: "/items", section: "Manage" },
 ]

@@ -1,8 +1,12 @@
+import base64
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
 from anyio import to_thread
+from cryptography.fernet import Fernet
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
@@ -18,6 +22,28 @@ password_hash = PasswordHash(
 
 
 ALGORITHM = "HS256"
+
+
+def evaluation_cipher() -> Fernet:
+    """Build the app-bound cipher for request credentials stored in the DB."""
+    key = base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest())
+    return Fernet(key)
+
+
+def encrypt_evaluation_headers(headers: dict[str, str]) -> str:
+    return evaluation_cipher().encrypt(json.dumps(headers).encode()).decode()
+
+
+def decrypt_evaluation_headers(value: str) -> dict[str, str]:
+    if not value:
+        return {}
+    payload = json.loads(evaluation_cipher().decrypt(value.encode()))
+    if not isinstance(payload, dict) or not all(
+        isinstance(key, str) and isinstance(item, str)
+        for key, item in payload.items()
+    ):
+        raise ValueError("Stored evaluation headers are invalid")
+    return payload
 
 
 def create_access_token(subject: str | Any, expires_delta: timedelta) -> str:

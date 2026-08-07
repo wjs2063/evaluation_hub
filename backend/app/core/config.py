@@ -9,6 +9,7 @@ from pydantic import (
     EmailStr,
     HttpUrl,
     PostgresDsn,
+    SecretStr,
     TypeAdapter,
     computed_field,
     model_validator,
@@ -110,6 +111,13 @@ class Settings(BaseSettings):
         return self
 
     EMAIL_RESET_TOKEN_EXPIRE_HOURS: int = 48
+
+    # Evaluation requests are deliberately kept conservative.  These values are
+    # server-side limits; they are not accepted from a browser request.
+    EVALUATION_REQUEST_TIMEOUT_SECONDS: float = 15
+    EVALUATION_MAX_CONCURRENT_RUNS: int = 2
+    DEEPEVAL_MODEL: str = "gpt-4.1-mini"
+    OPENAI_API_KEY: SecretStr | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

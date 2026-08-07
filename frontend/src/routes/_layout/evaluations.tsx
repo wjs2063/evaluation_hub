@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link as RouterLink } from "@tanstack/react-router"
 import axios from "axios"
 import {
   CheckCircle2,
@@ -88,14 +88,14 @@ function Evaluations() {
     <div className="flex flex-col gap-6">
       <PageHeader
         eyebrow="AI quality workspace"
-        title="데이터셋 평가"
-        description="CSV 또는 JSON 데이터셋을 업로드해 모델 응답의 정확도와 유사도를 빠르게 확인하세요."
+        title="평가 기능 안내 및 빠른 로컬 채점"
+        description="저장형 라이브 API 테스트와 회귀 평가는 사이드바에서 시작하세요. 이 화면은 외부 API를 호출하지 않는 빠른 로컬 채점 도구입니다."
       />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(320px,0.75fr)_minmax(0,1.25fr)]">
         <form onSubmit={runEvaluation} className="console-surface h-fit">
           <div className="border-b px-5 py-4">
-            <h2 className="text-sm font-semibold">새 평가 실행</h2>
+            <h2 className="text-sm font-semibold">빠른 로컬 채점</h2>
             <p className="mt-1 text-xs text-muted-foreground">
               최대 5MB · UTF-8 · CSV 또는 JSON
             </p>
@@ -181,7 +181,12 @@ function Evaluations() {
               ) : (
                 <FlaskConical />
               )}
-              {isRunning ? "평가 중…" : "평가 실행"}
+              {isRunning ? "채점 중…" : "로컬 채점 실행"}
+            </Button>
+            <Button type="button" variant="outline" className="w-full" asChild>
+              <RouterLink to="/evaluation-single-turn/live-test">
+                저장형 라이브 API 테스트로 이동
+              </RouterLink>
             </Button>
           </div>
         </form>
