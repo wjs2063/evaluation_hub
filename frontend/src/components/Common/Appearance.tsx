@@ -1,6 +1,6 @@
 import { Monitor, Moon, Sun } from "lucide-react"
-
-import { type Theme, useTheme } from "@/components/theme-provider"
+import { ItemIndicator } from "@/components/Sidebar/ItemIndicator"
+import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -14,25 +14,20 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 
-type LucideIcon = React.FC<React.SVGProps<SVGSVGElement>>
-
-const ICON_MAP: Record<Theme, LucideIcon> = {
-  system: Monitor,
-  light: Sun,
-  dark: Moon,
-}
-
 export const SidebarAppearance = () => {
   const { isMobile } = useSidebar()
-  const { setTheme, theme } = useTheme()
-  const Icon = ICON_MAP[theme]
+  const { setTheme } = useTheme()
 
   return (
     <SidebarMenuItem>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <SidebarMenuButton tooltip="Appearance" data-testid="theme-button">
-            <Icon className="size-4 text-sidebar-foreground/55" />
+          <SidebarMenuButton
+            tooltip="Appearance"
+            data-testid="theme-button"
+            className="h-9 rounded-full! px-2.5"
+          >
+            <ItemIndicator />
             <span>Appearance</span>
             <span className="sr-only">Toggle theme</span>
           </SidebarMenuButton>

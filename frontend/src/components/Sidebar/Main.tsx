@@ -1,5 +1,4 @@
 import { Link as RouterLink, useRouterState } from "@tanstack/react-router"
-import type { LucideIcon } from "lucide-react"
 
 import {
   SidebarGroup,
@@ -13,9 +12,9 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { ItemIndicator } from "./ItemIndicator"
 
 export type SubItem = {
-  icon: LucideIcon
   title: string
   path: string
   children?: SubItem[]
@@ -67,15 +66,12 @@ export function Main({ items }: MainProps) {
                     <SidebarMenuButton
                       tooltip={item.title}
                       isActive={isActive || hasActiveChild}
-                      className="h-9 rounded-md px-2.5 text-sidebar-foreground/70 data-[active=true]:bg-cyan-400/12 data-[active=true]:text-cyan-300"
+                      className="h-9 rounded-full! px-2.5 text-sidebar-foreground/70 data-[active=true]:bg-cyan-400/12 data-[active=true]:text-cyan-300"
                       asChild
                     >
                       <RouterLink to={item.path} onClick={handleMenuClick}>
-                        <item.icon />
+                        <ItemIndicator active={isActive || hasActiveChild} />
                         <span>{item.title}</span>
-                        {(isActive || hasActiveChild) && (
-                          <span className="ml-auto size-1.5 rounded-full bg-cyan-400" />
-                        )}
                       </RouterLink>
                     </SidebarMenuButton>
                     {item.children && (
@@ -84,13 +80,16 @@ export function Main({ items }: MainProps) {
                           <SidebarMenuSubItem key={child.title}>
                             <SidebarMenuSubButton
                               isActive={isActiveOrDescendant(child)}
+                              className="rounded-full!"
                               asChild
                             >
                               <RouterLink
                                 to={child.path}
                                 onClick={handleMenuClick}
                               >
-                                <child.icon />
+                                <ItemIndicator
+                                  active={isActiveOrDescendant(child)}
+                                />
                                 <span>{child.title}</span>
                               </RouterLink>
                             </SidebarMenuSubButton>
@@ -102,13 +101,18 @@ export function Main({ items }: MainProps) {
                                       isActive={isActiveOrDescendant(
                                         grandchild,
                                       )}
+                                      className="rounded-full!"
                                       asChild
                                     >
                                       <RouterLink
                                         to={grandchild.path}
                                         onClick={handleMenuClick}
                                       >
-                                        <grandchild.icon />
+                                        <ItemIndicator
+                                          active={isActiveOrDescendant(
+                                            grandchild,
+                                          )}
+                                        />
                                         <span>{grandchild.title}</span>
                                       </RouterLink>
                                     </SidebarMenuSubButton>

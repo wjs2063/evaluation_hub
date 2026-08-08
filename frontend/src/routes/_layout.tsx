@@ -31,19 +31,19 @@ function Layout() {
     select: (state) => state.location.pathname,
   })
   const pageName = pathname.startsWith("/evaluation-single-turn/live-test")
-    ? "라이브 API 테스트"
+    ? "Live Test"
     : pathname.startsWith("/evaluation-single-turn/regression")
-      ? "회귀 평가"
+      ? "Regression Test"
       : pathname.startsWith("/evaluation-single-turn")
         ? "Single-turn Evaluation"
         : pathname.startsWith("/evaluation-multi-turn/live-test")
-          ? "멀티턴 라이브 API 테스트"
+          ? "Multi-turn Live Test"
           : pathname.startsWith("/evaluation-multi-turn/regression")
-            ? "멀티턴 회귀 평가"
+            ? "Multi-turn Regression Test"
             : pathname.startsWith("/evaluation-multi-turn")
-              ? "멀티턴 평가"
+              ? "Multi-turn Evaluation"
               : pathname.startsWith("/evaluation-rag")
-                ? "RAG 테스트 (준비 중)"
+                ? "RAG Test (Coming Soon)"
                 : {
                     "/": "Overview",
                     "/evaluations": "Evaluations",

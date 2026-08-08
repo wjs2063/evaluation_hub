@@ -1,10 +1,10 @@
 import { Link } from "@tanstack/react-router"
-import { Orbit } from "lucide-react"
 
+import { ItemIndicator } from "@/components/Sidebar/ItemIndicator"
 import { cn } from "@/lib/utils"
 
 interface LogoProps {
-  variant?: "full" | "icon" | "responsive"
+  variant?: "full" | "responsive"
   className?: string
   asLink?: boolean
 }
@@ -14,7 +14,6 @@ export function Logo({
   className,
   asLink = true,
 }: LogoProps) {
-  const showText = variant !== "icon"
   const content = (
     <div
       className={cn(
@@ -23,25 +22,15 @@ export function Logo({
         className,
       )}
     >
-      <span className="relative grid size-8 shrink-0 place-items-center rounded-md bg-cyan-400 text-slate-950 shadow-[0_0_22px_rgb(34_211_238/0.22)]">
-        <Orbit className="size-5" strokeWidth={2.2} />
-        <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full border-2 border-sidebar bg-orange-400" />
-      </span>
-      {showText && (
-        <span
-          className={cn(
-            "min-w-0 leading-none",
-            variant === "responsive" && "group-data-[collapsible=icon]:hidden",
-          )}
-        >
-          <span className="block text-[15px] font-semibold tracking-tight">
-            EvalHub
-          </span>
-          <span className="mt-1 block text-[9px] font-medium uppercase tracking-[0.18em] opacity-50">
-            AI Evaluation
-          </span>
+      <ItemIndicator active />
+      <span className="min-w-0 leading-none">
+        <span className="block text-[15px] font-semibold tracking-tight">
+          EvaluationHub
         </span>
-      )}
+        <span className="mt-1 block text-[9px] font-medium uppercase tracking-[0.18em] opacity-50">
+          AI Evaluation
+        </span>
+      </span>
     </div>
   )
 
@@ -53,7 +42,7 @@ export function Logo({
     <Link
       to="/"
       aria-label="Go to overview"
-      className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+      className="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
     >
       {content}
     </Link>

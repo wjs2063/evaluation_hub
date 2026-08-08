@@ -1,12 +1,3 @@
-import {
-  Boxes,
-  FlaskConical,
-  Gauge,
-  MessageSquareMore,
-  Network,
-  UsersRound,
-} from "lucide-react"
-
 import { SidebarAppearance } from "@/components/Common/Appearance"
 import { Logo } from "@/components/Common/Logo"
 import {
@@ -22,50 +13,43 @@ import { type Item, Main } from "./Main"
 import { User } from "./User"
 
 const baseItems: Item[] = [
-  { icon: Gauge, title: "Overview", path: "/", section: "Monitor" },
+  { title: "Overview", path: "/", section: "Monitor" },
   {
-    icon: FlaskConical,
     title: "Evaluations",
     path: "/evaluations",
     section: "Evaluate",
     children: [
       {
-        icon: MessageSquareMore,
         title: "Single-turn",
         path: "/evaluation-single-turn",
         children: [
           {
-            icon: Network,
-            title: "라이브 API 테스트",
+            title: "Live Test",
             path: "/evaluation-single-turn/live-test",
           },
           {
-            icon: FlaskConical,
-            title: "회귀 평가",
+            title: "Regression Test",
             path: "/evaluation-single-turn/regression",
           },
         ],
       },
       {
-        icon: MessageSquareMore,
         title: "Multi-turn",
         path: "/evaluation-multi-turn",
         children: [
           {
-            icon: Network,
-            title: "라이브 API 테스트",
+            title: "Live Test",
             path: "/evaluation-multi-turn/live-test",
           },
           {
-            icon: FlaskConical,
-            title: "회귀 평가",
+            title: "Regression Test",
             path: "/evaluation-multi-turn/regression",
           },
         ],
       },
     ],
   },
-  { icon: Boxes, title: "Items", path: "/items", section: "Manage" },
+  { title: "Items", path: "/items", section: "Manage" },
 ]
 
 export function AppSidebar() {
@@ -83,7 +67,6 @@ export function AppSidebar() {
     ? [
         ...baseItems,
         {
-          icon: UsersRound,
           title: "Users",
           path: "/admin",
           section: "Administration",
@@ -92,15 +75,15 @@ export function AppSidebar() {
     : baseItems
 
   return (
-    <Sidebar collapsible="icon" className="border-sidebar-border">
-      <SidebarHeader className="border-b border-sidebar-border px-4 py-4 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0">
+    <Sidebar collapsible="offcanvas" className="border-sidebar-border">
+      <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
         <Logo variant="responsive" />
       </SidebarHeader>
       <SidebarContent className="py-3">
         <Main items={items} />
       </SidebarContent>
       <SidebarFooter className="border-t border-sidebar-border">
-        <div className="mx-2 flex items-center gap-2 rounded-md border border-sidebar-border bg-white/[0.04] px-2.5 py-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+        <div className="mx-2 flex items-center gap-2 rounded-full border border-sidebar-border bg-white/[0.04] px-3 py-2">
           <span
             className={cn(
               "size-2 rounded-full",
@@ -109,7 +92,7 @@ export function AppSidebar() {
               isApiUnavailable && "bg-destructive",
             )}
           />
-          <div className="min-w-0 group-data-[collapsible=icon]:hidden">
+          <div className="min-w-0">
             <p className="text-[11px] font-medium text-sidebar-foreground">
               {apiStatus}
             </p>
