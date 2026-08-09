@@ -194,6 +194,29 @@ def _token_recall(actual: str, expected: str) -> float:
     return len(actual_tokens & expected_tokens) / len(expected_tokens)
 
 
+def _local_metric_reason(
+    name: str, score: float, actual: str, expected: str
+) -> str | None:
+    if name == "exact_match":
+        result = (
+            "일치합니다"
+            if _normalize(actual) == _normalize(expected)
+            else "일치하지 않습니다"
+        )
+        return f"정규화된 실제 응답과 기대 응답이 {result}."
+    if name == "similarity":
+        return f"정규화된 응답의 문자 단위 유사도는 {score:.2%}입니다."
+    if name == "token_recall":
+        actual_tokens = set(_normalize(actual).split())
+        expected_tokens = set(_normalize(expected).split())
+        matched = len(actual_tokens & expected_tokens)
+        return (
+            f"기대 응답 토큰 {len(expected_tokens)}개 중 {matched}개가 실제 응답에 "
+            f"포함되어 있습니다. (포함률 {score:.2%})"
+        )
+    return None
+
+
 def _evaluate_row(row: dict[str, Any], index: int, threshold: float) -> EvaluationRow:
     missing = [
         field
@@ -219,9 +242,27 @@ def _evaluate_row(row: dict[str, Any], index: int, threshold: float) -> Evaluati
         score=score,
         passed=score >= threshold,
         metrics=[
-            MetricScore(name="exact_match", score=exact_match),
-            MetricScore(name="similarity", score=round(similarity, 4)),
-            MetricScore(name="token_recall", score=round(token_recall, 4)),
+            MetricScore(
+                name="exact_match",
+                score=exact_match,
+                reason=_local_metric_reason(
+                    "exact_match", exact_match, actual, expected
+                ),
+            ),
+            MetricScore(
+                name="similarity",
+                score=round(similarity, 4),
+                reason=_local_metric_reason(
+                    "similarity", round(similarity, 4), actual, expected
+                ),
+            ),
+            MetricScore(
+                name="token_recall",
+                score=round(token_recall, 4),
+                reason=_local_metric_reason(
+                    "token_recall", round(token_recall, 4), actual, expected
+                ),
+            ),
         ],
     )
 
@@ -571,8 +612,13 @@ async def _call_endpoint(
     template: str,
     response_path: str | None,
     variables: dict[str, Any],
+    json_overrides: dict[str, Any] | None = None,
 ) -> tuple[int, str, str, str]:
     body, is_json = _request_body(template, variables)
+    if json_overrides:
+        if not is_json or not isinstance(body, dict):
+            raise ValueError("A multi-turn request body must be a JSON object")
+        body = {**body, **json_overrides}
     async with httpx.AsyncClient(
         timeout=settings.EVALUATION_REQUEST_TIMEOUT_SECONDS, follow_redirects=False
     ) as client:
@@ -612,10 +658,19 @@ def _saved_run(
     serialized: list[SavedRunRow] = []
     for row in rows:
         baseline = baseline_by_dataset.get(row.dataset_row_id)
+        metrics = [MetricScore(**metric) for metric in (row.metrics or [])]
+        for metric in metrics:
+            if metric.reason is None:
+                metric.reason = _local_metric_reason(
+                    metric.name,
+                    metric.score,
+                    row.actual_output,
+                    row.expected_output,
+                )
         serialized.append(
             SavedRunRow(
                 **row.model_dump(exclude={"metrics"}),
-                metrics=[MetricScore(**metric) for metric in (row.metrics or [])],
+                metrics=metrics,
                 baseline_actual_output=baseline.actual_output if baseline else None,
                 output_changed=(row.actual_output != baseline.actual_output)
                 if baseline
@@ -1244,6 +1299,17 @@ def _scenario_turns(
     identifiers = [turn.identifier for turn in turns]
     if len(set(identifiers)) != len(identifiers):
         raise HTTPException(422, "Each scenario turn identifier must be unique")
+    for index, turn in enumerate(turns):
+        try:
+            body = json.loads(turn.body_template)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                422, f"Turn {index + 1} request body must be valid JSON"
+            ) from exc
+        if not isinstance(body, dict):
+            raise HTTPException(
+                422, f"Turn {index + 1} request body must be a JSON object"
+            )
     return [
         EvaluationScenarioTurn(
             scenario_id=scenario_id,
@@ -1401,6 +1467,11 @@ async def update_scenario(
         for turn in existing:
             await session.delete(turn)
         turns = _scenario_turns(scenario.id, scenario_in.turns, endpoint)
+        existing_by_position = {turn.position: turn for turn in existing}
+        for turn, turn_input in zip(turns, scenario_in.turns, strict=True):
+            previous = existing_by_position.get(turn.position)
+            if previous and not turn_input.headers:
+                turn.encrypted_headers = previous.encrypted_headers
         session.add_all(turns)
     else:
         turns = list(
@@ -1473,9 +1544,11 @@ async def run_scenario(
         session.add(run)
         await session.flush()
         results: list[EvaluationScenarioRunTurn] = []
+        thread_id = str(run.id)
         variables: dict[str, Any] = {
             "previous_output": "",
             "conversation_history": [],
+            "thread_id": thread_id,
         }
         conversation: list[tuple[str, str]] = []
         base_headers = decrypt_evaluation_headers(endpoint.encrypted_headers)
@@ -1486,7 +1559,12 @@ async def run_scenario(
                     **decrypt_evaluation_headers(turn.encrypted_headers),
                 }
                 status, raw, actual, request_body = await _call_endpoint(
-                    turn.url, headers, turn.body_template, turn.response_path, variables
+                    turn.url,
+                    headers,
+                    turn.body_template,
+                    turn.response_path,
+                    variables,
+                    json_overrides={"thread_id": thread_id},
                 )
                 user_content = _conversation_user_content(request_body)
                 evaluation = await _evaluate_live_row(

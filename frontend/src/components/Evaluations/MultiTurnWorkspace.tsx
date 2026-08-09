@@ -43,13 +43,19 @@ type Turn = {
   headers?: Record<string, string>
   headers_configured?: boolean
 }
+type TurnDraft = Pick<
+  Turn,
+  "url" | "body_template" | "response_path" | "expected_output"
+> & {
+  headers_json: string
+}
 type ScenarioDraft = {
   name: string
   description: string
   endpoint_id: string
   threshold: number
   evaluator: "deepeval" | "local"
-  turns: Turn[]
+  turns: TurnDraft[]
 }
 type ScenarioRun = {
   id: string
@@ -106,21 +112,17 @@ const initialScenario = (endpointId = "", url = "") => ({
       identifier: "follow_up",
       url,
       headers: {},
-      body_template:
-        '{"message":"첫 답변의 내용을 유지하면서 이어서 답해줘","history":"{{conversation_history}}"}',
+      body_template: '{"message":"첫 답변의 내용을 유지하면서 이어서 답해줘"}',
       response_path: "answer",
       expected_output: "기대하는 후속 응답",
     },
   ],
 })
 
-const newTurn = (url = "", position = 1): Turn => ({
-  identifier: `turn_${position}`,
+const newTurn = (url = ""): TurnDraft => ({
   url,
-  body_template:
-    position === 1
-      ? '{"message":""}'
-      : '{"message":"","history":"{{conversation_history}}"}',
+  headers_json: "{}",
+  body_template: '{"message":""}',
   response_path: "answer",
   expected_output: "",
 })
@@ -241,6 +243,16 @@ export function MultiTurnWorkspace() {
       } catch {
         return `${index + 1}번째 turn URL은 올바른 HTTP(S) URL이어야 합니다.`
       }
+      try {
+        const body = JSON.parse(
+          String((turn as { body_template?: unknown }).body_template ?? ""),
+        )
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          return `${index + 1}번째 turn의 요청 body는 JSON 객체여야 합니다.`
+        }
+      } catch {
+        return `${index + 1}번째 turn의 요청 body JSON 문법을 확인해 주세요.`
+      }
     }
     return null
   }
@@ -283,10 +295,10 @@ export function MultiTurnWorkspace() {
     setCreateOpen(true)
   }
 
-  const updateDraftTurn = <Key extends keyof Turn>(
+  const updateDraftTurn = <Key extends keyof TurnDraft>(
     index: number,
     key: Key,
-    value: Turn[Key],
+    value: TurnDraft[Key],
   ) => {
     setDraft((current) => ({
       ...current,
@@ -309,9 +321,45 @@ export function MultiTurnWorkspace() {
   }
 
   const createFromForm = async () => {
+    if (!draft.description.trim()) {
+      setDraftError("시나리오 설명을 입력해 주세요.")
+      return
+    }
+    let turns: Turn[]
+    try {
+      turns = draft.turns.map((turn, index) => {
+        const headers: unknown = JSON.parse(turn.headers_json)
+        if (
+          !headers ||
+          typeof headers !== "object" ||
+          Array.isArray(headers) ||
+          Object.values(headers).some((value) => typeof value !== "string")
+        ) {
+          throw new Error(`${index + 1}번째 turn의 headers`)
+        }
+        const body: unknown = JSON.parse(turn.body_template)
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          throw new Error(`${index + 1}번째 turn의 요청 body`)
+        }
+        return {
+          identifier: `turn_${index + 1}`,
+          url: turn.url,
+          headers: headers as Record<string, string>,
+          body_template: turn.body_template,
+          response_path: turn.response_path,
+          expected_output: turn.expected_output,
+        }
+      })
+    } catch (headersError) {
+      setDraftError(
+        `${headersError instanceof Error ? headersError.message : "Turn 설정"}를 올바른 JSON 객체로 입력해 주세요. Headers의 값은 모두 문자열이어야 합니다.`,
+      )
+      return
+    }
     const scenario = {
       ...draft,
-      description: draft.description.trim() || null,
+      description: draft.description.trim(),
+      turns,
     }
     const validationError = validateScenario(scenario)
     if (validationError) {
@@ -436,9 +484,10 @@ export function MultiTurnWorkspace() {
                 htmlFor="scenario-description"
                 className="space-y-1 text-sm md:col-span-2"
               >
-                <span>설명 (선택)</span>
+                <span>시나리오 설명</span>
                 <Input
                   id="scenario-description"
+                  required
                   value={draft.description}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -488,7 +537,8 @@ export function MultiTurnWorkspace() {
                 <div>
                   <h3 className="text-sm font-semibold">대화 turn</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    각 요청은 POST JSON으로 전송됩니다. 다음 turn에는{" "}
+                    각 요청은 POST JSON으로 전송되며 실행별 thread_id가 자동으로
+                    추가됩니다. 별도의 history가 필요한 API는{" "}
                     <code>{"{{conversation_history}}"}</code>로 이전 질문·응답
                     전체를 전달할 수 있습니다.
                   </p>
@@ -506,7 +556,6 @@ export function MultiTurnWorkspace() {
                           endpoints.find(
                             (endpoint) => endpoint.id === current.endpoint_id,
                           )?.base_url,
-                          current.turns.length + 1,
                         ),
                       ],
                     }))
@@ -523,26 +572,7 @@ export function MultiTurnWorkspace() {
                   <legend className="px-1 text-sm font-medium">
                     Turn {index + 1}
                   </legend>
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
-                    <label
-                      htmlFor={`turn-${index}-identifier`}
-                      className="space-y-1 text-sm"
-                    >
-                      <span>식별자</span>
-                      <Input
-                        id={`turn-${index}-identifier`}
-                        required
-                        value={turn.identifier}
-                        placeholder="first_answer"
-                        onChange={(event) =>
-                          updateDraftTurn(
-                            index,
-                            "identifier",
-                            event.target.value,
-                          )
-                        }
-                      />
-                    </label>
+                  <div className="flex justify-end">
                     <Button
                       type="button"
                       variant="ghost"
@@ -578,8 +608,27 @@ export function MultiTurnWorkspace() {
                     />
                   </label>
                   <div className="grid gap-3 md:grid-cols-2">
+                    <label className="space-y-1 text-sm md:col-span-2">
+                      <span>요청 Headers JSON</span>
+                      <textarea
+                        className="min-h-20 w-full rounded-md border bg-transparent p-3 font-mono text-xs"
+                        value={turn.headers_json}
+                        placeholder='{"Authorization":"Bearer ..."}'
+                        onChange={(event) =>
+                          updateDraftTurn(
+                            index,
+                            "headers_json",
+                            event.target.value,
+                          )
+                        }
+                      />
+                      <span className="block text-xs text-muted-foreground">
+                        문자열 key/value를 가진 JSON 객체입니다. 민감한 header는
+                        관리자만 저장할 수 있습니다.
+                      </span>
+                    </label>
                     <label className="space-y-1 text-sm">
-                      <span>요청 JSON 본문</span>
+                      <span>요청 Body JSON</span>
                       <textarea
                         className="min-h-28 w-full rounded-md border bg-transparent p-3 font-mono text-xs"
                         value={turn.body_template}
@@ -612,10 +661,11 @@ export function MultiTurnWorkspace() {
                         />
                       </label>
                       <label className="block space-y-1 text-sm">
-                        <span>기대 응답</span>
+                        <span>기대 답변 / 평가 기준</span>
                         <textarea
                           className="min-h-16 w-full rounded-md border bg-transparent p-3 text-sm"
                           value={turn.expected_output}
+                          placeholder="응답에 나와야 하는 내용이나 기대 답변"
                           onChange={(event) =>
                             updateDraftTurn(
                               index,
@@ -703,6 +753,7 @@ export function MultiTurnWorkspace() {
                 <h2 className="text-sm font-semibold">시나리오 JSON</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   모든 turn은 JSON 본문을 가진 <code>POST</code> 요청입니다.{" "}
+                  실행별 <code>thread_id</code>는 자동 추가됩니다.{" "}
                   <code>{"{{conversation_history}}"}</code>는 이전
                   user/assistant 대화 배열, <code>{"{{previous_output}}"}</code>
                   은 직전 응답입니다. DeepEval은 턴별 정확성과 전체 대화 흐름을

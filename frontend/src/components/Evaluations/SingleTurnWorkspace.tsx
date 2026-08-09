@@ -9,6 +9,10 @@ import {
 } from "react"
 
 import { PageHeader } from "@/components/Common/PageHeader"
+import {
+  EvaluationDetails,
+  type EvaluationMetric,
+} from "@/components/Evaluations/EvaluationDetails"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,6 +39,7 @@ type RunRow = {
   response_status: number | null
   score: number
   passed: boolean
+  metrics: EvaluationMetric[]
   error: string | null
 }
 type Run = {
@@ -68,7 +73,8 @@ const emptyForm: FormState = {
   name: "새 싱글턴 데이터셋",
   description: "",
   endpoint_id: "",
-  body_template: '{\n  "input": "{{input}}"\n}',
+  body_template:
+    '{\n  "message": "{{input}}",\n  "system_prompt": null,\n  "history": []\n}',
   response_path: "",
   threshold: 0.7,
   evaluator: "deepeval",
@@ -211,6 +217,14 @@ export function SingleTurnWorkspace({
 
   const handleSave = async (event: FormEvent) => {
     event.preventDefault()
+    try {
+      JSON.parse(form.body_template)
+    } catch {
+      setError(
+        '요청 JSON 템플릿의 문법을 확인해 주세요. 예: {"message":"{{input}}","history":[]}',
+      )
+      return
+    }
     if (!selectedId) return handleCreate()
     try {
       setIsBusy(true)
@@ -468,14 +482,23 @@ export function SingleTurnWorkspace({
                 <option value="deepeval">DeepEval GEval · 자연어 품질</option>
                 <option value="local">Local baseline · 빠른 비교</option>
               </select>
-              <textarea
-                className="min-h-32 rounded-md border bg-transparent p-3 font-mono text-xs md:col-span-2"
-                value={form.body_template}
-                aria-label="Request body template"
-                onChange={(event) =>
-                  setForm({ ...form, body_template: event.target.value })
-                }
-              />
+              <label className="space-y-2 md:col-span-2">
+                <span className="text-sm font-medium">요청 JSON 템플릿</span>
+                <textarea
+                  className="min-h-40 w-full rounded-md border bg-transparent p-3 font-mono text-xs"
+                  value={form.body_template}
+                  aria-label="Request body template"
+                  spellCheck={false}
+                  onChange={(event) =>
+                    setForm({ ...form, body_template: event.target.value })
+                  }
+                />
+                <span className="block text-xs text-muted-foreground">
+                  전송할 JSON 구조를 직접 입력하세요. 객체·배열 안의{" "}
+                  <code>{"{{input}}"}</code>는 실행 시 각 데이터셋 행의
+                  Input으로 치환됩니다.
+                </span>
+              </label>
             </div>
             <div className="mt-4 flex justify-end">
               <Button type="submit" disabled={isBusy}>
@@ -631,7 +654,7 @@ export function SingleTurnWorkspace({
                         통과 {savedRun.passed}/{savedRun.total}
                       </Badge>
                       <Badge variant="outline">
-                        평균 {Math.round(savedRun.average_score * 100)}%
+                        평균 {(savedRun.average_score * 100).toFixed(2)}%
                       </Badge>
                     </span>
                   </button>
@@ -661,13 +684,13 @@ export function SingleTurnWorkspace({
                           Expected · score
                         </p>
                         <p>{row.expected_output}</p>
-                        <Badge
-                          className="mt-2"
-                          variant={row.passed ? "secondary" : "destructive"}
-                        >
-                          {Math.round(row.score * 100)}%
-                        </Badge>
                       </div>
+                      <EvaluationDetails
+                        className="mt-2 md:col-span-3"
+                        score={row.score}
+                        passed={row.passed}
+                        metrics={row.metrics}
+                      />
                     </div>
                   ))}
                 </article>

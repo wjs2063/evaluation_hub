@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import os
 import socket
 import uuid
@@ -20,6 +21,7 @@ from app.api.routes.evaluations import (
     _openai_api_key,
     _overall_conversation_result,
     _replace_variables,
+    _request_body,
     _require_deepeval,
     _saved_run,
     _scenario_run,
@@ -65,6 +67,11 @@ def test_exact_match_passes() -> None:
 
     assert result.passed is True
     assert result.score == 1
+    assert [metric.reason for metric in result.metrics] == [
+        "정규화된 실제 응답과 기대 응답이 일치합니다.",
+        "정규화된 응답의 문자 단위 유사도는 100.00%입니다.",
+        "기대 응답 토큰 2개 중 2개가 실제 응답에 포함되어 있습니다. (포함률 100.00%)",
+    ]
 
 
 def test_import_json_dataset_accepts_data_envelope() -> None:
@@ -96,6 +103,26 @@ def test_saved_run_serializes_metrics_once() -> None:
 
     assert result.created_at == run.created_at.isoformat()
     assert result.rows[0].metrics[0].name == "exact_match"
+    assert (
+        result.rows[0].metrics[0].reason
+        == "정규화된 실제 응답과 기대 응답이 일치합니다."
+    )
+
+
+def test_saved_run_preserves_deepeval_reason_with_line_breaks() -> None:
+    run = EvaluationRun(dataset_id=uuid.uuid4(), owner_id=uuid.uuid4())
+    reason = "핵심 내용이 일치합니다.\n표현도 자연스럽습니다."
+    row = EvaluationRunRow(
+        run_id=run.id,
+        input="hello",
+        expected_output="world",
+        actual_output="world",
+        metrics=[{"name": "deepeval_geval", "score": 0.825, "reason": reason}],
+    )
+
+    result = _saved_run(run, [row])
+
+    assert result.rows[0].metrics[0].reason == reason
 
 
 @pytest.mark.parametrize(
@@ -228,6 +255,23 @@ def test_turn_variables_inject_structured_conversation_history() -> None:
     assert result == {"message": "follow up", "history": history}
 
 
+def test_request_body_supports_user_defined_chat_json() -> None:
+    template = """{
+      "message": "{{input}}",
+      "system_prompt": "Answer briefly",
+      "history": [{"role": "user", "content": "Earlier question"}]
+    }"""
+
+    body, is_json = _request_body(template, {"input": "Current question"})
+
+    assert is_json is True
+    assert body == {
+        "message": "Current question",
+        "system_prompt": "Answer briefly",
+        "history": [{"role": "user", "content": "Earlier question"}],
+    }
+
+
 def test_conversation_user_content_uses_message_instead_of_raw_json() -> None:
     assert (
         _conversation_user_content(
@@ -309,6 +353,45 @@ def test_live_requests_are_always_post(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert received_method == "POST"
     assert result[2] == "ok"
+
+
+def test_multi_turn_request_injects_run_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    received_body: dict[str, object] = {}
+    received_header = ""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received_body, received_header
+        received_body = dict(json.loads(request.content))
+        received_header = request.headers["x-scenario"]
+        return httpx.Response(200, json={"answer": "ok"})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+
+    result = asyncio.run(
+        _call_endpoint(
+            "https://api.example.com/chat",
+            {"X-Scenario": "multi-turn"},
+            '{"message":"hello","thread_id":"user-supplied"}',
+            "answer",
+            {},
+            json_overrides={"thread_id": "run-id"},
+        )
+    )
+
+    assert received_body == {"message": "hello", "thread_id": "run-id"}
+    assert received_header == "multi-turn"
+    assert json.loads(result[3])["thread_id"] == "run-id"
 
 
 def test_scenario_run_serializes_baseline_turn_comparison() -> None:

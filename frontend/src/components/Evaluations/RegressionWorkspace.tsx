@@ -4,6 +4,10 @@ import { ChevronRight, History, Play } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader } from "@/components/Common/PageHeader"
+import {
+  EvaluationDetails,
+  type EvaluationMetric,
+} from "@/components/Evaluations/EvaluationDetails"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 
@@ -22,6 +26,7 @@ type RunRow = {
   response_status: number | null
   score: number
   passed: boolean
+  metrics: EvaluationMetric[]
   error: string | null
   baseline_actual_output?: string | null
   output_changed?: boolean | null
@@ -181,7 +186,7 @@ export function RegressionWorkspace() {
               {runs.map((run) => (
                 <option key={run.id} value={run.id}>
                   {new Date(run.created_at).toLocaleString()} · 평균{" "}
-                  {Math.round(run.average_score * 100)}%
+                  {(run.average_score * 100).toFixed(2)}%
                 </option>
               ))}
             </select>
@@ -231,7 +236,7 @@ export function RegressionWorkspace() {
                 통과 {selectedRun.passed}/{selectedRun.total}
               </Badge>
               <Badge variant="outline">
-                평균 {Math.round(selectedRun.average_score * 100)}%
+                평균 {(selectedRun.average_score * 100).toFixed(2)}%
               </Badge>
             </div>
           </div>
@@ -263,7 +268,7 @@ export function RegressionWorkspace() {
                     >
                       {row.output_changed ? "응답 변경" : "변경 없음"} ·{" "}
                       {row.score_delta && row.score_delta > 0 ? "+" : ""}
-                      {Math.round((row.score_delta ?? 0) * 100)}p
+                      {((row.score_delta ?? 0) * 100).toFixed(2)}p
                     </Badge>
                   </div>
                 )}
@@ -281,13 +286,13 @@ export function RegressionWorkspace() {
                   <pre className="whitespace-pre-wrap break-words font-sans">
                     {row.expected_output}
                   </pre>
-                  <Badge
-                    className="mt-3"
-                    variant={row.passed ? "secondary" : "destructive"}
-                  >
-                    {Math.round(row.score * 100)}%
-                  </Badge>
                 </div>
+                <EvaluationDetails
+                  className="lg:col-span-4"
+                  score={row.score}
+                  passed={row.passed}
+                  metrics={row.metrics}
+                />
               </article>
             ))}
           </div>
