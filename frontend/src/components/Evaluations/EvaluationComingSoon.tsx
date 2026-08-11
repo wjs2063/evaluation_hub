@@ -22,7 +22,7 @@ export function EvaluationComingSoon({
 
       <section className="console-surface grid min-h-80 place-items-center p-8 text-center">
         <div>
-          <span className="mx-auto grid size-12 place-items-center rounded-full bg-cyan-400/10 text-cyan-500">
+          <span className="mx-auto grid size-12 place-items-center rounded-md bg-primary/10 text-primary">
             <Construction className="size-6" />
           </span>
           <Badge variant="secondary" className="mt-4">

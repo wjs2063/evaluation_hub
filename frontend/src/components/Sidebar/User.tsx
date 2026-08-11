@@ -18,24 +18,28 @@ import {
 } from "@/components/ui/sidebar"
 import useAuth from "@/hooks/useAuth"
 import { getInitials } from "@/utils"
-import { ItemIndicator } from "./ItemIndicator"
 
 interface UserInfoProps {
   fullName?: string
   email?: string
+  showEmail?: boolean
 }
 
-function UserInfo({ fullName, email }: UserInfoProps) {
+function UserInfo({ fullName, email, showEmail = true }: UserInfoProps) {
   return (
     <div className="flex items-center gap-2.5 w-full min-w-0">
-      <Avatar className="size-8 rounded-full">
-        <AvatarFallback className="rounded-full bg-cyan-400/15 text-cyan-300">
+      <Avatar className="size-7 rounded-[5px]">
+        <AvatarFallback className="rounded-[5px] border border-primary/30 bg-primary/10 text-[10px] text-primary">
           {getInitials(fullName || "User")}
         </AvatarFallback>
       </Avatar>
       <div className="flex flex-col items-start min-w-0">
-        <p className="text-sm font-medium truncate w-full">{fullName}</p>
-        <p className="text-xs text-muted-foreground truncate w-full">{email}</p>
+        <p className="w-full truncate text-xs font-medium">{fullName}</p>
+        {showEmail && (
+          <p className="w-full truncate text-xs text-muted-foreground">
+            {email}
+          </p>
+        )}
       </div>
     </div>
   )
@@ -63,11 +67,14 @@ export function User({ user }: { user: any }) {
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
               size="lg"
-              className="rounded-full! text-sidebar-foreground/80 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+              className="rounded-md text-sidebar-foreground/80 data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
               data-testid="user-menu"
             >
-              <ItemIndicator />
-              <UserInfo fullName={user?.full_name} email={user?.email} />
+              <UserInfo
+                fullName={user?.full_name}
+                email={user?.email}
+                showEmail={false}
+              />
               <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>

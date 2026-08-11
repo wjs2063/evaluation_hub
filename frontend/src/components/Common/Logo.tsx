@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router"
 
-import { ItemIndicator } from "@/components/Sidebar/ItemIndicator"
 import { cn } from "@/lib/utils"
 
 interface LogoProps {
@@ -22,14 +21,11 @@ export function Logo({
         className,
       )}
     >
-      <ItemIndicator active />
-      <span className="min-w-0 leading-none">
-        <span className="block text-[15px] font-semibold tracking-tight">
-          EvaluationHub
-        </span>
-        <span className="mt-1 block text-[9px] font-medium uppercase tracking-[0.18em] opacity-50">
-          AI Evaluation
-        </span>
+      <span className="grid size-7 shrink-0 place-items-center rounded-[5px] border border-sidebar-primary/50 bg-sidebar-primary/10 text-xs font-semibold text-sidebar-primary">
+        E
+      </span>
+      <span className="min-w-0 truncate text-sm font-medium tracking-tight">
+        EvaluationHub
       </span>
     </div>
   )
@@ -42,7 +38,7 @@ export function Logo({
     <Link
       to="/"
       aria-label="Go to overview"
-      className="block rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+      className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
     >
       {content}
     </Link>

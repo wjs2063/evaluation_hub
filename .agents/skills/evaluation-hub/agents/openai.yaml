@@ -1,0 +1,5 @@
+interface:
+  display_name: "EvaluationHub Engineering"
+  short_description: "Async EvaluationHub features and verification"
+  brand_color: "#F97316"
+  default_prompt: "Use $evaluation-hub to implement and verify this AI evaluation feature with async FastAPI, AsyncSession, and uv."

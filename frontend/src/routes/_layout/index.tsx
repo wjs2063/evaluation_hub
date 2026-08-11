@@ -118,7 +118,7 @@ function Dashboard() {
       value: itemsQuery.isPending ? "—" : String(itemsQuery.data?.count ?? 0),
       helper: "Available resources",
       icon: Boxes,
-      color: "text-cyan-500 bg-cyan-500/10",
+      color: "text-primary bg-primary/10",
     },
     {
       label: currentUser?.is_superuser ? "Active users" : "Account status",
@@ -131,7 +131,7 @@ function Dashboard() {
         ? `${usersQuery.data?.count ?? 0} total accounts`
         : "Session is authorized",
       icon: UsersRound,
-      color: "text-violet-500 bg-violet-500/10",
+      color: "text-primary bg-primary/10",
     },
     {
       label: "Access level",

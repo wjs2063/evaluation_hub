@@ -396,7 +396,7 @@ export function SingleTurnWorkspace({
                     setError("데이터셋을 불러오지 못했습니다."),
                   )
                 }}
-                className={`w-full rounded-md px-3 py-2 text-left text-sm ${dataset.id === selectedId ? "bg-cyan-400/12 text-cyan-500" : "hover:bg-muted"}`}
+                className={`w-full rounded-md px-3 py-2 text-left text-sm ${dataset.id === selectedId ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
               >
                 <p className="truncate font-medium">{dataset.name}</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">

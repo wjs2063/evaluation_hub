@@ -45,6 +45,33 @@ test("Logo links to the home page", async ({ page }) => {
   ).toHaveAttribute("href", "/")
 })
 
+test("Authentication shell is responsive in dark and light themes", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto("/login")
+  await expect(page.locator("html")).toHaveClass(/dark/)
+  await expect
+    .poll(() => page.evaluate(() => document.body.scrollWidth))
+    .toBeLessThanOrEqual(1440)
+  await page.screenshot({
+    path: testInfo.outputPath("login-dark-desktop.png"),
+    fullPage: true,
+  })
+
+  await page.getByTestId("theme-button").click()
+  await page.getByTestId("light-mode").click()
+  await expect(page.locator("html")).toHaveClass(/light/)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect
+    .poll(() => page.evaluate(() => document.body.scrollWidth))
+    .toBeLessThanOrEqual(390)
+  await page.screenshot({
+    path: testInfo.outputPath("login-light-mobile.png"),
+    fullPage: true,
+  })
+})
+
 test("Log in with valid email and password ", async ({ page }) => {
   await page.goto("/login")
 

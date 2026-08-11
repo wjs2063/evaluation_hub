@@ -2,8 +2,8 @@ import { appEnvironment, environmentLabels } from "@/config/environment"
 
 const environmentStyles = {
   development: {
-    container: "border-sky-500/25 bg-sky-500/5 text-sky-700 dark:text-sky-300",
-    dot: "bg-sky-500",
+    container: "border-primary/25 bg-primary/5 text-primary",
+    dot: "bg-primary",
   },
   staging: {
     container:

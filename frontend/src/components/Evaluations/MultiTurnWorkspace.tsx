@@ -717,7 +717,7 @@ export function MultiTurnWorkspace() {
                   setError("시나리오를 불러오지 못했습니다."),
                 )
               }
-              className={`w-full rounded-md px-3 py-2 text-left text-sm ${scenario.id === selectedId ? "bg-cyan-400/12 text-cyan-500" : "hover:bg-muted"}`}
+              className={`w-full rounded-md px-3 py-2 text-left text-sm ${scenario.id === selectedId ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
             >
               <p className="truncate font-medium">{scenario.name}</p>
               <p className="text-xs text-muted-foreground">
@@ -740,7 +740,7 @@ export function MultiTurnWorkspace() {
                 </p>
                 {user?.is_superuser && (
                   <RouterLink
-                    className="mt-3 inline-block text-sm text-cyan-500 underline"
+                    className="mt-3 inline-block text-sm text-primary underline"
                     to="/admin"
                   >
                     A 서버 관리로 이동

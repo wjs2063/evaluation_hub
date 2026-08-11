@@ -24,18 +24,29 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/evaluations/datasets**", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
+  await page.route("**/api/v1/evaluations/scenarios**", (route) =>
+    route.fulfill({ json: { data: [] } }),
+  )
   await page.route("**/api/v1/evaluations/endpoints", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
+  await page.route("**/api/v1/items**", (route) =>
+    route.fulfill({ json: { data: [], count: 0 } }),
+  )
+  await page.route("**/api/v1/users", (route) =>
+    route.fulfill({ json: { data: [], count: 0 } }),
+  )
 })
 
-test("sidebar uses English evaluation labels", async ({ page }) => {
+test("sidebar uses English labels and simple page indicators", async ({
+  page,
+}) => {
   await page.goto("/")
 
   const sidebar = page.locator('[data-sidebar="sidebar"]')
   const brand = sidebar.getByRole("link", { name: "Go to overview" })
   await expect(brand.getByText("EvaluationHub", { exact: true })).toBeVisible()
-  await expect(brand.locator('[data-sidebar="item-indicator"]')).toHaveCount(1)
+  await expect(brand.getByText("E", { exact: true })).toBeVisible()
   await expect(sidebar.getByText("Single-turn", { exact: true })).toBeVisible()
   await expect(sidebar.getByText("Multi-turn", { exact: true })).toBeVisible()
   await expect(sidebar.getByText("Live Test", { exact: true })).toHaveCount(2)
@@ -55,36 +66,19 @@ test("sidebar uses English evaluation labels", async ({ page }) => {
     ),
   )
   expect(borderRadii.length).toBeGreaterThan(0)
-  expect(borderRadii.every((radius) => radius > 100)).toBe(true)
+  expect(borderRadii.every((radius) => radius >= 4 && radius <= 8)).toBe(true)
 
-  await expect(sidebar.locator('[data-sidebar="item-indicator"]')).toHaveCount(
-    13,
-  )
+  const contentButtons = sidebar.locator('[data-sidebar="content"] a')
+  await expect(contentButtons).toHaveCount(10)
+  await expect(contentButtons.locator("svg")).toHaveCount(0)
   await expect(
-    sidebarButtons.locator('[data-sidebar="item-indicator"]'),
-  ).toHaveCount(12)
-  await expect(
-    sidebarButtons
-      .filter({ hasText: "Overview" })
-      .locator('[data-sidebar="item-indicator"]'),
+    sidebar.locator('[data-sidebar="menu-button"][data-active="true"]'),
   ).toHaveAttribute("data-active", "true")
-
-  const indicatorSizes = await sidebar
-    .locator('[data-sidebar="item-indicator"]')
-    .evaluateAll((indicators) =>
-      indicators.map((indicator) => {
-        const style = getComputedStyle(indicator)
-        return [style.width, style.height]
-      }),
-    )
-  expect(
-    indicatorSizes.every(
-      ([width, height]) => width === "8px" && height === "8px",
-    ),
-  ).toBe(true)
 })
 
-test("sidebar dots distinguish active evaluation paths", async ({ page }) => {
+test("sidebar orange state distinguishes active evaluation paths", async ({
+  page,
+}) => {
   await page.goto("/evaluation-single-turn/live-test")
 
   const sidebar = page.locator('[data-sidebar="sidebar"]')
@@ -95,21 +89,101 @@ test("sidebar dots distinguish active evaluation paths", async ({ page }) => {
       .first()
 
   for (const label of ["Evaluations", "Single-turn", "Live Test"]) {
-    await expect(
-      buttonFor(label).locator('[data-sidebar="item-indicator"]'),
-    ).toHaveAttribute("data-active", "true")
-    await expect(
-      buttonFor(label).locator('[data-sidebar="item-indicator"]'),
-    ).toHaveClass(/bg-cyan-400/)
+    await expect(buttonFor(label)).toHaveAttribute("data-active", "true")
+    await expect(buttonFor(label).locator("span").first()).toHaveClass(
+      /bg-primary/,
+    )
   }
 
   for (const label of ["Overview", "Multi-turn", "Items", "Users"]) {
-    await expect(
-      buttonFor(label).locator('[data-sidebar="item-indicator"]'),
-    ).toHaveAttribute("data-active", "false")
-    await expect(
-      buttonFor(label).locator('[data-sidebar="item-indicator"]'),
-    ).toHaveClass(/bg-sidebar-foreground\/25/)
+    await expect(buttonFor(label)).toHaveAttribute("data-active", "false")
+    await expect(buttonFor(label).locator("span").first()).toHaveClass(
+      /border-sidebar-border/,
+    )
+  }
+})
+
+test("new users default to dark and system mode follows OS changes", async ({
+  page,
+}) => {
+  await page.emulateMedia({ colorScheme: "light" })
+  await page.goto("/")
+  await expect(page.locator("html")).toHaveClass(/dark/)
+
+  await page.getByTestId("theme-button").click()
+  await page.getByTestId("system-mode").click()
+  await expect(page.locator("html")).toHaveClass(/light/)
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("vite-ui-theme")))
+    .toBe("system")
+
+  await page.emulateMedia({ colorScheme: "dark" })
+  await expect(page.locator("html")).toHaveClass(/dark/)
+})
+
+test("responsive shell has no horizontal overflow in either theme", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto("/")
+  await expect(page.getByText("Workspace overview")).toBeVisible()
+  await expect
+    .poll(() => page.evaluate(() => document.body.scrollWidth))
+    .toBeLessThanOrEqual(1440)
+  await page.screenshot({
+    path: testInfo.outputPath("overview-dark-desktop.png"),
+    fullPage: true,
+  })
+
+  await page.getByTestId("theme-button").click()
+  await page.getByTestId("light-mode").click()
+  await expect(page.locator("html")).toHaveClass(/light/)
+  await expect(page.getByTestId("light-mode")).not.toBeVisible()
+  await expect
+    .poll(() => page.evaluate(() => document.body.scrollWidth))
+    .toBeLessThanOrEqual(1440)
+  await page.screenshot({
+    path: testInfo.outputPath("overview-light-desktop.png"),
+    fullPage: true,
+  })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect
+    .poll(() => page.evaluate(() => document.body.scrollWidth))
+    .toBeLessThanOrEqual(390)
+  await page.locator('button[data-sidebar="trigger"]').click()
+  const mobileSidebar = page.locator(
+    '[data-sidebar="sidebar"][data-mobile="true"]',
+  )
+  await expect(mobileSidebar.getByText("EvaluationHub")).toBeVisible()
+  await expect
+    .poll(async () => (await mobileSidebar.boundingBox())?.x ?? -1)
+    .toBe(0)
+  await page.screenshot({
+    path: testInfo.outputPath("overview-light-mobile-menu.png"),
+    fullPage: true,
+  })
+})
+
+test("primary console routes render without layout errors", async ({
+  page,
+}) => {
+  for (const path of [
+    "/items",
+    "/admin",
+    "/settings",
+    "/evaluations",
+    "/evaluation-single-turn/live-test",
+    "/evaluation-single-turn/regression",
+    "/evaluation-multi-turn/live-test",
+    "/evaluation-multi-turn/regression",
+  ]) {
+    await page.goto(path)
+    await expect(page.locator("main h1").first()).toBeVisible()
+    await expect(page.getByTestId("error-component")).toHaveCount(0)
+    await expect
+      .poll(() => page.evaluate(() => document.body.scrollWidth))
+      .toBeLessThanOrEqual(1280)
   }
 })
 

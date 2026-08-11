@@ -5,11 +5,11 @@ import { logInUser, signUpNewUser } from "./utils/user"
 
 test.use({ storageState: { cookies: [], origins: [] } })
 
-test("Password Recovery title is visible", async ({ page }) => {
+test("Password recovery title is visible", async ({ page }) => {
   await page.goto("/recover-password")
 
   await expect(
-    page.getByRole("heading", { name: "Password Recovery" }),
+    page.getByRole("heading", { name: "Reset your access" }),
   ).toBeVisible()
 })
 

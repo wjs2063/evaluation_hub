@@ -106,7 +106,7 @@ function Evaluations() {
               className="grid min-h-44 cursor-pointer place-items-center rounded-md border border-dashed bg-muted/25 p-6 text-center transition-colors hover:bg-muted/50"
             >
               <span>
-                <UploadCloud className="mx-auto mb-3 size-8 text-cyan-500" />
+                <UploadCloud className="mx-auto mb-3 size-8 text-primary" />
                 <span className="block text-sm font-medium">
                   {file ? file.name : "데이터셋을 선택하세요"}
                 </span>
@@ -132,7 +132,7 @@ function Evaluations() {
                 <label htmlFor="threshold" className="font-medium">
                   통과 기준
                 </label>
-                <span className="font-mono text-xs text-cyan-500">
+                <span className="font-mono text-xs text-primary">
                   {formatPercent(threshold)}
                 </span>
               </div>
@@ -144,7 +144,7 @@ function Evaluations() {
                 step="0.05"
                 value={threshold}
                 onChange={(event) => setThreshold(Number(event.target.value))}
-                className="w-full accent-cyan-500"
+                className="w-full accent-primary"
               />
             </div>
 

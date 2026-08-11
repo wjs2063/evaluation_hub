@@ -12,8 +12,6 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { ItemIndicator } from "./ItemIndicator"
-
 export type SubItem = {
   title: string
   path: string
@@ -26,6 +24,26 @@ export type Item = SubItem & {
 
 interface MainProps {
   items: Item[]
+}
+
+function MenuIcon({ active }: { active: boolean }) {
+  return (
+    <span
+      className={
+        active
+          ? "grid size-5 shrink-0 place-items-center rounded-[4px] border border-primary/60 bg-primary/10"
+          : "grid size-5 shrink-0 place-items-center rounded-[4px] border border-sidebar-border bg-white/[0.02]"
+      }
+    >
+      <span
+        className={
+          active
+            ? "size-1.5 rounded-[2px] bg-primary"
+            : "size-1.5 rounded-[2px] bg-sidebar-foreground/25"
+        }
+      />
+    </span>
+  )
 }
 
 export function Main({ items }: MainProps) {
@@ -51,8 +69,8 @@ export function Main({ items }: MainProps) {
   return (
     <>
       {Object.entries(sections).map(([section, sectionItems]) => (
-        <SidebarGroup key={section} className="mb-2">
-          <SidebarGroupLabel className="px-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+        <SidebarGroup key={section} className="mb-1.5">
+          <SidebarGroupLabel className="h-7 px-2 text-[9px] font-medium uppercase tracking-[0.14em] text-sidebar-foreground/30">
             {section}
           </SidebarGroupLabel>
           <SidebarGroupContent>
@@ -60,68 +78,72 @@ export function Main({ items }: MainProps) {
               {sectionItems.map((item) => {
                 const isActive = currentPath === item.path
                 const hasActiveChild = item.children?.some(isActiveOrDescendant)
+                const itemIsActive = isActive || hasActiveChild === true
 
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton
                       tooltip={item.title}
-                      isActive={isActive || hasActiveChild}
-                      className="h-9 rounded-full! px-2.5 text-sidebar-foreground/70 data-[active=true]:bg-cyan-400/12 data-[active=true]:text-cyan-300"
+                      isActive={itemIsActive}
+                      className="h-9 rounded-md px-2 text-sidebar-foreground/65 hover:bg-white/[0.035] data-[active=true]:bg-transparent data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground"
                       asChild
                     >
                       <RouterLink to={item.path} onClick={handleMenuClick}>
-                        <ItemIndicator active={isActive || hasActiveChild} />
+                        <MenuIcon active={itemIsActive} />
                         <span>{item.title}</span>
                       </RouterLink>
                     </SidebarMenuButton>
                     {item.children && (
-                      <SidebarMenuSub>
-                        {item.children.map((child) => (
-                          <SidebarMenuSubItem key={child.title}>
-                            <SidebarMenuSubButton
-                              isActive={isActiveOrDescendant(child)}
-                              className="rounded-full!"
-                              asChild
-                            >
-                              <RouterLink
-                                to={child.path}
-                                onClick={handleMenuClick}
+                      <SidebarMenuSub className="mx-0 ml-2 gap-0 border-0 px-0 py-0.5">
+                        {item.children.map((child) => {
+                          const childIsActive = isActiveOrDescendant(child)
+                          return (
+                            <SidebarMenuSubItem key={child.title}>
+                              <SidebarMenuSubButton
+                                isActive={childIsActive}
+                                className="h-8 translate-x-0 rounded-md px-2 text-sidebar-foreground/60 hover:bg-white/[0.035] data-[active=true]:bg-transparent data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground"
+                                asChild
                               >
-                                <ItemIndicator
-                                  active={isActiveOrDescendant(child)}
-                                />
-                                <span>{child.title}</span>
-                              </RouterLink>
-                            </SidebarMenuSubButton>
-                            {child.children && (
-                              <SidebarMenuSub className="ml-3">
-                                {child.children.map((grandchild) => (
-                                  <SidebarMenuSubItem key={grandchild.title}>
-                                    <SidebarMenuSubButton
-                                      isActive={isActiveOrDescendant(
-                                        grandchild,
-                                      )}
-                                      className="rounded-full!"
-                                      asChild
-                                    >
-                                      <RouterLink
-                                        to={grandchild.path}
-                                        onClick={handleMenuClick}
+                                <RouterLink
+                                  to={child.path}
+                                  onClick={handleMenuClick}
+                                >
+                                  <MenuIcon active={childIsActive} />
+                                  <span>{child.title}</span>
+                                </RouterLink>
+                              </SidebarMenuSubButton>
+                              {child.children && (
+                                <SidebarMenuSub className="mx-0 ml-4 gap-0 border-0 px-0 py-0.5">
+                                  {child.children.map((grandchild) => {
+                                    const grandchildIsActive =
+                                      isActiveOrDescendant(grandchild)
+                                    return (
+                                      <SidebarMenuSubItem
+                                        key={grandchild.title}
                                       >
-                                        <ItemIndicator
-                                          active={isActiveOrDescendant(
-                                            grandchild,
-                                          )}
-                                        />
-                                        <span>{grandchild.title}</span>
-                                      </RouterLink>
-                                    </SidebarMenuSubButton>
-                                  </SidebarMenuSubItem>
-                                ))}
-                              </SidebarMenuSub>
-                            )}
-                          </SidebarMenuSubItem>
-                        ))}
+                                        <SidebarMenuSubButton
+                                          isActive={grandchildIsActive}
+                                          className="h-8 translate-x-0 rounded-md px-2 text-xs text-sidebar-foreground/55 hover:bg-white/[0.035] data-[active=true]:bg-transparent data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground"
+                                          asChild
+                                        >
+                                          <RouterLink
+                                            to={grandchild.path}
+                                            onClick={handleMenuClick}
+                                          >
+                                            <MenuIcon
+                                              active={grandchildIsActive}
+                                            />
+                                            <span>{grandchild.title}</span>
+                                          </RouterLink>
+                                        </SidebarMenuSubButton>
+                                      </SidebarMenuSubItem>
+                                    )
+                                  })}
+                                </SidebarMenuSub>
+                              )}
+                            </SidebarMenuSubItem>
+                          )
+                        })}
                       </SidebarMenuSub>
                     )}
                   </SidebarMenuItem>

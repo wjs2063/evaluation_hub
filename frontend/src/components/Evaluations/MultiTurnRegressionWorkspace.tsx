@@ -159,7 +159,7 @@ export function MultiTurnRegressionWorkspace() {
           </p>
           {user?.is_superuser && (
             <RouterLink
-              className="mt-3 inline-block text-sm text-cyan-500 underline"
+              className="mt-3 inline-block text-sm text-primary underline"
               to="/admin"
             >
               A 서버 관리로 이동

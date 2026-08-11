@@ -56,7 +56,7 @@ function Layout() {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset className="min-w-0">
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between border-b bg-background/95 px-4 backdrop-blur md:px-6">
+        <header className="sticky top-0 z-20 flex h-13 shrink-0 items-center justify-between border-b bg-background/92 px-4 backdrop-blur-md md:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <SidebarTrigger className="-ml-1 text-muted-foreground" />
             <div className="h-5 w-px bg-border" />
@@ -70,7 +70,7 @@ function Layout() {
           </div>
           <EnvironmentBadge />
         </header>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 p-4 sm:p-5 lg:p-6">
           <div className="mx-auto max-w-[1440px]">
             <Outlet />
           </div>

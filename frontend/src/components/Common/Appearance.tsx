@@ -1,5 +1,4 @@
-import { Monitor, Moon, Sun } from "lucide-react"
-import { ItemIndicator } from "@/components/Sidebar/ItemIndicator"
+import { Check, Monitor, Moon, Sun } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import {
@@ -16,7 +15,7 @@ import {
 
 export const SidebarAppearance = () => {
   const { isMobile } = useSidebar()
-  const { setTheme } = useTheme()
+  const { theme, setTheme } = useTheme()
 
   return (
     <SidebarMenuItem>
@@ -25,9 +24,11 @@ export const SidebarAppearance = () => {
           <SidebarMenuButton
             tooltip="Appearance"
             data-testid="theme-button"
-            className="h-9 rounded-full! px-2.5"
+            className="h-9 rounded-md px-2.5"
           >
-            <ItemIndicator />
+            <span className="grid size-6 shrink-0 place-items-center rounded-[5px] border border-sidebar-border bg-white/[0.025] text-sidebar-foreground/50">
+              <Monitor className="size-3.5" aria-hidden="true" />
+            </span>
             <span>Appearance</span>
             <span className="sr-only">Toggle theme</span>
           </SidebarMenuButton>
@@ -43,6 +44,7 @@ export const SidebarAppearance = () => {
           >
             <Sun className="mr-2 h-4 w-4" />
             Light
+            {theme === "light" && <Check className="ml-auto" />}
           </DropdownMenuItem>
           <DropdownMenuItem
             data-testid="dark-mode"
@@ -50,10 +52,15 @@ export const SidebarAppearance = () => {
           >
             <Moon className="mr-2 h-4 w-4" />
             Dark
+            {theme === "dark" && <Check className="ml-auto" />}
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setTheme("system")}>
+          <DropdownMenuItem
+            data-testid="system-mode"
+            onClick={() => setTheme("system")}
+          >
             <Monitor className="mr-2 h-4 w-4" />
             System
+            {theme === "system" && <Check className="ml-auto" />}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -62,7 +69,7 @@ export const SidebarAppearance = () => {
 }
 
 export const Appearance = () => {
-  const { setTheme } = useTheme()
+  const { theme, setTheme } = useTheme()
 
   return (
     <div className="flex items-center justify-center">
@@ -81,6 +88,7 @@ export const Appearance = () => {
           >
             <Sun className="mr-2 h-4 w-4" />
             Light
+            {theme === "light" && <Check className="ml-auto" />}
           </DropdownMenuItem>
           <DropdownMenuItem
             data-testid="dark-mode"
@@ -88,10 +96,15 @@ export const Appearance = () => {
           >
             <Moon className="mr-2 h-4 w-4" />
             Dark
+            {theme === "dark" && <Check className="ml-auto" />}
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => setTheme("system")}>
+          <DropdownMenuItem
+            data-testid="system-mode"
+            onClick={() => setTheme("system")}
+          >
             <Monitor className="mr-2 h-4 w-4" />
             System
+            {theme === "system" && <Check className="ml-auto" />}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
