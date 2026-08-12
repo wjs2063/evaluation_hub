@@ -8,6 +8,10 @@ import {
   useState,
 } from "react"
 
+import {
+  type EvaluationMetricProfilePublic,
+  EvaluationsService,
+} from "@/client"
 import { PageHeader } from "@/components/Common/PageHeader"
 import {
   EvaluationDetails,
@@ -24,6 +28,7 @@ type Dataset = {
   description: string | null
   evaluation_type: string
   endpoint_id: string | null
+  metric_profile_id: string | null
   body_template: string
   response_path: string | null
   threshold: number
@@ -55,6 +60,7 @@ type FormState = {
   name: string
   description: string
   endpoint_id: string
+  metric_profile_id: string
   body_template: string
   response_path: string
   threshold: number
@@ -73,6 +79,7 @@ const emptyForm: FormState = {
   name: "새 싱글턴 데이터셋",
   description: "",
   endpoint_id: "",
+  metric_profile_id: "",
   body_template:
     '{\n  "message": "{{input}}",\n  "system_prompt": null,\n  "history": []\n}',
   response_path: "",
@@ -90,6 +97,7 @@ const toForm = (dataset: Dataset): FormState => ({
   name: dataset.name,
   description: dataset.description ?? "",
   endpoint_id: dataset.endpoint_id ?? "",
+  metric_profile_id: dataset.metric_profile_id ?? "",
   body_template: dataset.body_template,
   response_path: dataset.response_path ?? "",
   threshold: dataset.threshold,
@@ -110,6 +118,9 @@ export function SingleTurnWorkspace({
   const [runs, setRuns] = useState<Run[]>([])
   const [endpoints, setEndpoints] = useState<
     { id: string; name: string; base_url: string }[]
+  >([])
+  const [metricProfiles, setMetricProfiles] = useState<
+    EvaluationMetricProfilePublic[]
   >([])
   const [error, setError] = useState("")
   const [isBusy, setIsBusy] = useState(false)
@@ -182,6 +193,16 @@ export function SingleTurnWorkspace({
   }, [])
 
   useEffect(() => {
+    EvaluationsService.readMetricProfiles()
+      .then((response) =>
+        setMetricProfiles(
+          response.data.filter((profile) => profile.is_active !== false),
+        ),
+      )
+      .catch(() => setError("평가 프로필 목록을 불러오지 못했습니다."))
+  }, [])
+
+  useEffect(() => {
     if (selectedId) loadRuns(selectedId).catch(() => setRuns([]))
   }, [loadRuns, selectedId])
 
@@ -190,6 +211,8 @@ export function SingleTurnWorkspace({
     description: form.description || null,
     evaluation_type: evaluationType,
     endpoint_id: form.endpoint_id || null,
+    metric_profile_id:
+      form.evaluator === "deepeval" ? form.metric_profile_id || null : null,
     body_template: form.body_template,
     response_path: form.response_path || null,
     threshold: Number(form.threshold),
@@ -479,9 +502,35 @@ export function SingleTurnWorkspace({
                   })
                 }
               >
-                <option value="deepeval">DeepEval GEval · 자연어 품질</option>
+                <option value="deepeval">DeepEval · 고정 공식 지표</option>
                 <option value="local">Local baseline · 빠른 비교</option>
               </select>
+              {form.evaluator === "deepeval" && (
+                <label className="space-y-1 text-sm">
+                  <span>평가지표 프로필</span>
+                  <select
+                    aria-label="DeepEval metric profile"
+                    className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+                    value={form.metric_profile_id}
+                    onChange={(event) =>
+                      setForm({
+                        ...form,
+                        metric_profile_id: event.target.value,
+                      })
+                    }
+                  >
+                    <option value="" disabled>
+                      평가에 사용할 프로필을 선택하세요
+                    </option>
+                    {metricProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name} · v{profile.version} ·{" "}
+                        {(profile.metrics ?? []).length}개 지표
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <label className="space-y-2 md:col-span-2">
                 <span className="text-sm font-medium">요청 JSON 템플릿</span>
                 <textarea
@@ -654,7 +703,7 @@ export function SingleTurnWorkspace({
                         통과 {savedRun.passed}/{savedRun.total}
                       </Badge>
                       <Badge variant="outline">
-                        평균 {(savedRun.average_score * 100).toFixed(2)}%
+                        평균 {(savedRun.average_score * 100).toFixed(2)}점
                       </Badge>
                     </span>
                   </button>

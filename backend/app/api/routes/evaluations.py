@@ -14,12 +14,18 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import delete, func
 from sqlmodel import col, select
 
 from app.api.deps import CurrentSuperuser, CurrentUser, SessionDep
 from app.core.config import settings
 from app.core.security import decrypt_evaluation_headers, encrypt_evaluation_headers
+from app.evaluation_metrics import (
+    METRIC_CATALOG,
+    catalog_definition,
+    ensure_korean_reason,
+    evaluate_selected_metrics,
+)
 from app.models import (
     EvaluationDataset,
     EvaluationDatasetCreate,
@@ -36,7 +42,18 @@ from app.models import (
     EvaluationEndpointPublic,
     EvaluationEndpointsPublic,
     EvaluationEndpointUpdate,
+    EvaluationMetricCatalogItem,
+    EvaluationMetricCatalogPublic,
+    EvaluationMetricDefinitionCreate,
+    EvaluationMetricDefinitionPublic,
+    EvaluationMetricProfile,
+    EvaluationMetricProfileCreate,
+    EvaluationMetricProfileItem,
+    EvaluationMetricProfilePublic,
+    EvaluationMetricProfilesPublic,
+    EvaluationMetricProfileUpdate,
     EvaluationRun,
+    EvaluationRunMetricResult,
     EvaluationRunRow,
     EvaluationScenario,
     EvaluationScenarioCreate,
@@ -67,7 +84,13 @@ CONVERSATION_SCORE_WEIGHT = 0.6
 class MetricScore(BaseModel):
     name: str
     score: float
+    display_name: str | None = None
+    weight_percent: int | None = None
+    weighted_score: float | None = None
+    raw_score: float | None = None
+    score_direction: str | None = None
     reason: str | None = None
+    error: str | None = None
 
 
 class EvaluationRow(BaseModel):
@@ -129,6 +152,8 @@ class SavedRunSummary(BaseModel):
     pass_rate: float
     average_score: float
     geval_available: bool
+    metric_profile_id: uuid.UUID | None = None
+    metric_profile_version: int | None = None
     created_at: str
 
 
@@ -331,7 +356,11 @@ def _deepeval_single(
     return MetricScore(
         name="deepeval_geval",
         score=round(float(metric.score), 4),
-        reason=str(metric.reason or "")[:2_000] or None,
+        reason=ensure_korean_reason(
+            str(metric.reason or "")[:2_000] or None,
+            float(metric.score),
+            settings.DEEPEVAL_MODEL,
+        ),
     )
 
 
@@ -342,6 +371,7 @@ async def _evaluate_live_row(
     index: int,
     threshold: float,
     evaluator: str,
+    metric_definitions: list[EvaluationMetricDefinitionCreate] | None = None,
 ) -> EvaluationRow:
     if evaluator == "local":
         return _evaluate_row(
@@ -351,6 +381,41 @@ async def _evaluate_live_row(
         )
     if evaluator != "deepeval":
         raise ValueError("Evaluator must be 'deepeval' or 'local'")
+    if metric_definitions:
+        try:
+            composite_results = await evaluate_selected_metrics(
+                metric_definitions,
+                input_text=input_text,
+                actual_output=actual,
+                expected_output=expected,
+                model_name=settings.DEEPEVAL_MODEL,
+            )
+        except Exception as exc:
+            raise ValueError(f"DeepEval metrics failed: {exc}") from exc
+        metrics = [
+            MetricScore(
+                name=result.name,
+                display_name=result.display_name,
+                score=result.score,
+                weight_percent=result.weight_percent,
+                weighted_score=result.weighted_score,
+                raw_score=result.raw_score,
+                score_direction=result.score_direction,
+                reason=result.reason,
+                error=result.error,
+            )
+            for result in composite_results
+        ]
+        final_score = round(sum(metric.weighted_score or 0 for metric in metrics), 4)
+        return EvaluationRow(
+            index=index,
+            input=input_text,
+            actual_output=actual,
+            expected_output=expected,
+            score=final_score,
+            passed=final_score >= threshold,
+            metrics=metrics,
+        )
     score = await asyncio.to_thread(
         _deepeval_single, input_text, actual, expected, threshold
     )
@@ -389,7 +454,12 @@ def _deepeval_conversation(
         model=settings.DEEPEVAL_MODEL,
     )
     metric.measure(test_case)
-    return round(float(metric.score), 4), str(metric.reason or "")[:2_000] or None
+    score = round(float(metric.score), 4)
+    return score, ensure_korean_reason(
+        str(metric.reason or "")[:2_000] or None,
+        score,
+        settings.DEEPEVAL_MODEL,
+    )
 
 
 def parse_dataset(filename: str, content: bytes) -> list[dict[str, Any]]:
@@ -545,6 +615,107 @@ async def _count(session: SessionDep, model: Any, condition: Any) -> int:
     return int(
         (await session.exec(select(func.count(model.id)).where(condition))).one()
     )
+
+
+async def _stage_run_evidence(
+    session: SessionDep,
+    rows: list[EvaluationRunRow],
+    metric_results: list[EvaluationRunMetricResult],
+) -> None:
+    """Insert parent run rows before their normalized metric results."""
+    session.add_all(rows)
+    await session.flush()
+    session.add_all(metric_results)
+
+
+def _metric_definition(
+    item: EvaluationMetricProfileItem,
+) -> EvaluationMetricDefinitionCreate:
+    return EvaluationMetricDefinitionCreate(
+        metric_type=item.key,
+        weight_percent=item.weight_percent,
+    )
+
+
+async def _metric_profile_items(
+    session: SessionDep, profile_id: uuid.UUID
+) -> list[EvaluationMetricProfileItem]:
+    return list(
+        (
+            await session.exec(
+                select(EvaluationMetricProfileItem)
+                .where(EvaluationMetricProfileItem.profile_id == profile_id)
+                .order_by(col(EvaluationMetricProfileItem.position))
+            )
+        ).all()
+    )
+
+
+async def _metric_profile_or_422(
+    session: SessionDep, profile_id: uuid.UUID, *, require_active: bool = True
+) -> tuple[EvaluationMetricProfile, list[EvaluationMetricProfileItem]]:
+    profile = await session.get(EvaluationMetricProfile, profile_id)
+    if not profile:
+        raise HTTPException(422, "Selected metric profile does not exist")
+    if require_active and not profile.is_active:
+        raise HTTPException(422, "Selected metric profile is inactive")
+    items = await _metric_profile_items(session, profile.id)
+    if not items:
+        raise HTTPException(422, "Selected metric profile has no metrics")
+    return profile, items
+
+
+def _metric_profile_public(
+    profile: EvaluationMetricProfile, items: list[EvaluationMetricProfileItem]
+) -> EvaluationMetricProfilePublic:
+    return EvaluationMetricProfilePublic(
+        **profile.model_dump(),
+        metrics=[
+            EvaluationMetricDefinitionPublic(
+                id=item.id,
+                position=item.position,
+                display_name=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).display_name,
+                description=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).description,
+                required_fields=list(
+                    catalog_definition(
+                        _metric_definition(item).metric_type
+                    ).required_fields
+                ),
+                score_direction=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).score_direction,
+                uses_llm=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).uses_llm,
+                docs_url=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).docs_url,
+                **_metric_definition(item).model_dump(),
+            )
+            for item in items
+        ],
+    )
+
+
+def _metric_profile_snapshot(
+    profile: EvaluationMetricProfile, items: list[EvaluationMetricProfileItem]
+) -> dict[str, object]:
+    return {
+        "id": str(profile.id),
+        "name": profile.name,
+        "version": profile.version,
+        "metrics": [
+            {
+                "metric_type": item.key,
+                "weight_percent": item.weight_percent,
+            }
+            for item in items
+        ],
+    }
 
 
 def _dataset_public(
@@ -774,7 +945,7 @@ def _overall_conversation_result(
             + conversation_score * CONVERSATION_SCORE_WEIGHT,
             4,
         )
-        flow_summary = f"대화 흐름 {conversation_score:.0%}"
+        flow_summary = f"대화 흐름 {conversation_score * 100:.2f}점"
         flow_passed = conversation_score >= threshold
     all_turns_passed = total_turns > 0 and passed_turns == total_turns
     overall_passed = bool(
@@ -782,8 +953,8 @@ def _overall_conversation_result(
     )
     verdict = "통과" if overall_passed else "실패"
     reason = (
-        f"종합 {overall_score:.0%} ({verdict}) · "
-        f"턴별 정확성 {turn_average_score:.0%} · {flow_summary}."
+        f"종합 {overall_score * 100:.2f}점 ({verdict}) · "
+        f"턴별 정확성 {turn_average_score * 100:.2f}점 · {flow_summary}."
     )
     if conversation_reason:
         reason += f" 대화 흐름 판정: {conversation_reason}"
@@ -817,6 +988,114 @@ async def read_integrations(_current_user: CurrentUser) -> IntegrationsResponse:
             ),
         ]
     )
+
+
+@router.get("/metric-profiles", response_model=EvaluationMetricProfilesPublic)
+async def read_metric_profiles(
+    session: SessionDep, user: CurrentUser
+) -> EvaluationMetricProfilesPublic:
+    statement = select(EvaluationMetricProfile).order_by(
+        col(EvaluationMetricProfile.updated_at).desc()
+    )
+    if not user.is_superuser:
+        statement = statement.where(EvaluationMetricProfile.is_active == True)  # noqa: E712
+    profiles = list((await session.exec(statement)).all())
+    return EvaluationMetricProfilesPublic(
+        data=[
+            _metric_profile_public(
+                profile, await _metric_profile_items(session, profile.id)
+            )
+            for profile in profiles
+        ],
+        count=len(profiles),
+    )
+
+
+@router.get("/metric-catalog", response_model=EvaluationMetricCatalogPublic)
+async def read_metric_catalog(_user: CurrentUser) -> EvaluationMetricCatalogPublic:
+    data = [
+        EvaluationMetricCatalogItem(
+            metric_type=metric_type,
+            display_name=definition.display_name,
+            description=definition.description,
+            required_fields=list(definition.required_fields),
+            score_direction=definition.score_direction,
+            uses_llm=definition.uses_llm,
+            docs_url=definition.docs_url,
+        )
+        for metric_type, definition in METRIC_CATALOG.items()
+    ]
+    return EvaluationMetricCatalogPublic(data=data, count=len(data))
+
+
+@router.post("/metric-profiles", response_model=EvaluationMetricProfilePublic)
+async def create_metric_profile(
+    profile_in: EvaluationMetricProfileCreate,
+    session: SessionDep,
+    _admin: CurrentSuperuser,
+) -> EvaluationMetricProfilePublic:
+    profile = EvaluationMetricProfile(**profile_in.model_dump(exclude={"metrics"}))
+    session.add(profile)
+    await session.flush()
+    items = [
+        EvaluationMetricProfileItem(
+            profile_id=profile.id,
+            position=position,
+            key=metric.metric_type.value,
+            display_name=catalog_definition(metric.metric_type).display_name,
+            criteria=catalog_definition(metric.metric_type).description,
+            weight_percent=metric.weight_percent,
+            evaluation_params=list(
+                catalog_definition(metric.metric_type).required_fields
+            ),
+        )
+        for position, metric in enumerate(profile_in.metrics)
+    ]
+    session.add_all(items)
+    await session.commit()
+    await session.refresh(profile)
+    return _metric_profile_public(profile, items)
+
+
+@router.put(
+    "/metric-profiles/{profile_id}", response_model=EvaluationMetricProfilePublic
+)
+async def update_metric_profile(
+    profile_id: uuid.UUID,
+    profile_in: EvaluationMetricProfileUpdate,
+    session: SessionDep,
+    _admin: CurrentSuperuser,
+) -> EvaluationMetricProfilePublic:
+    profile = await session.get(EvaluationMetricProfile, profile_id)
+    if not profile:
+        raise HTTPException(404, "Metric profile not found")
+    profile.sqlmodel_update(profile_in.model_dump(exclude={"metrics"}))
+    profile.version += 1
+    profile.updated_at = get_datetime_utc()
+    await session.exec(
+        delete(EvaluationMetricProfileItem).where(
+            col(EvaluationMetricProfileItem.profile_id) == profile.id
+        )
+    )
+    items = [
+        EvaluationMetricProfileItem(
+            profile_id=profile.id,
+            position=position,
+            key=metric.metric_type.value,
+            display_name=catalog_definition(metric.metric_type).display_name,
+            criteria=catalog_definition(metric.metric_type).description,
+            weight_percent=metric.weight_percent,
+            evaluation_params=list(
+                catalog_definition(metric.metric_type).required_fields
+            ),
+        )
+        for position, metric in enumerate(profile_in.metrics)
+    ]
+    session.add(profile)
+    session.add_all(items)
+    await session.commit()
+    await session.refresh(profile)
+    return _metric_profile_public(profile, items)
 
 
 @router.get("/endpoints", response_model=EvaluationEndpointsPublic)
@@ -935,8 +1214,12 @@ async def read_datasets(
 async def create_dataset(
     dataset_in: EvaluationDatasetCreate, session: SessionDep, user: CurrentUser
 ) -> EvaluationDatasetPublic:
+    if dataset_in.evaluator == "deepeval" and not dataset_in.metric_profile_id:
+        raise HTTPException(422, "DeepEval datasets require a metric profile")
     if dataset_in.endpoint_id:
         await _endpoint_or_422(session, dataset_in.endpoint_id)
+    if dataset_in.metric_profile_id:
+        await _metric_profile_or_422(session, dataset_in.metric_profile_id)
     if dataset_in.headers:
         raise HTTPException(
             422, "Request headers must be configured on the managed A server"
@@ -1028,8 +1311,18 @@ async def update_dataset(
     user: CurrentUser,
 ) -> EvaluationDatasetPublic:
     dataset = await _dataset_or_404(session, user, dataset_id)
+    next_evaluator = dataset_in.evaluator or dataset.evaluator
+    next_profile_id = (
+        dataset_in.metric_profile_id
+        if "metric_profile_id" in dataset_in.model_fields_set
+        else dataset.metric_profile_id
+    )
+    if next_evaluator == "deepeval" and not next_profile_id:
+        raise HTTPException(422, "DeepEval datasets require a metric profile")
     if dataset_in.endpoint_id:
         await _endpoint_or_422(session, dataset_in.endpoint_id)
+    if dataset_in.metric_profile_id:
+        await _metric_profile_or_422(session, dataset_in.metric_profile_id)
     if dataset_in.headers:
         raise HTTPException(
             422, "Request headers must be configured on the managed A server"
@@ -1121,6 +1414,18 @@ async def run_saved_dataset(
     async with _run_semaphore:
         dataset = await _dataset_or_404(session, user, dataset_id)
         _ensure_evaluator_ready(dataset.evaluator)
+        metric_profile: EvaluationMetricProfile | None = None
+        metric_profile_items: list[EvaluationMetricProfileItem] = []
+        metric_definitions: list[EvaluationMetricDefinitionCreate] | None = None
+        if dataset.evaluator == "deepeval" and dataset.metric_profile_id:
+            metric_profile, metric_profile_items = await _metric_profile_or_422(
+                session, dataset.metric_profile_id
+            )
+            metric_definitions = [
+                _metric_definition(item) for item in metric_profile_items
+            ]
+        if dataset.evaluator == "deepeval" and not metric_definitions:
+            raise HTTPException(422, "DeepEval datasets require a metric profile")
         endpoint = await _endpoint_or_422(session, dataset.endpoint_id)
         rows = list(
             (
@@ -1158,10 +1463,18 @@ async def run_saved_dataset(
             owner_id=user.id,
             baseline_run_id=baseline_run_id,
             evaluator=dataset.evaluator,
+            metric_profile_id=metric_profile.id if metric_profile else None,
+            metric_profile_version=metric_profile.version if metric_profile else None,
+            metric_profile_snapshot=_metric_profile_snapshot(
+                metric_profile, metric_profile_items
+            )
+            if metric_profile
+            else None,
         )
         session.add(run)
         await session.flush()
         saved: list[EvaluationRunRow] = []
+        metric_results: list[EvaluationRunMetricResult] = []
         try:
             # Dataset headers were a legacy plaintext field. Credentials now
             # live exclusively on the administrator-managed endpoint.
@@ -1184,20 +1497,37 @@ async def run_saved_dataset(
                     index,
                     dataset.threshold,
                     dataset.evaluator,
+                    metric_definitions,
                 )
-                saved.append(
-                    EvaluationRunRow(
-                        run_id=run.id,
-                        dataset_row_id=row.id,
-                        input=row.input,
-                        expected_output=row.expected_output,
-                        actual_output=actual,
-                        response_status=status,
-                        response_body=response_body,
-                        score=evaluation.score,
-                        passed=evaluation.passed,
-                        metrics=[item.model_dump() for item in evaluation.metrics],
+                saved_row = EvaluationRunRow(
+                    run_id=run.id,
+                    dataset_row_id=row.id,
+                    input=row.input,
+                    expected_output=row.expected_output,
+                    actual_output=actual,
+                    response_status=status,
+                    response_body=response_body,
+                    score=evaluation.score,
+                    passed=evaluation.passed,
+                    metrics=[item.model_dump() for item in evaluation.metrics],
+                )
+                saved.append(saved_row)
+                metric_results.extend(
+                    EvaluationRunMetricResult(
+                        run_row_id=saved_row.id,
+                        metric_key=metric.name,
+                        display_name=metric.display_name or metric.name,
+                        score=metric.score,
+                        raw_score=metric.raw_score,
+                        score_direction=metric.score_direction or "higher_is_better",
+                        weight_percent=metric.weight_percent,
+                        weighted_score=metric.weighted_score,
+                        reason=metric.reason,
+                        error=metric.error,
                     )
+                    for metric in evaluation.metrics
+                    if metric.weight_percent is not None
+                    and metric.weighted_score is not None
                 )
             except (httpx.HTTPError, ValueError) as exc:
                 saved.append(
@@ -1210,7 +1540,7 @@ async def run_saved_dataset(
                         metrics=[],
                     )
                 )
-        session.add_all(saved)
+        await _stage_run_evidence(session, saved, metric_results)
         run.total, run.passed = len(saved), sum(row.passed for row in saved)
         run.failed = run.total - run.passed
         run.pass_rate = round(run.passed / run.total, 4)

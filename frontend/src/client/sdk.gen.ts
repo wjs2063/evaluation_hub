@@ -3,7 +3,634 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, PrivateCreateUserData, PrivateCreateUserResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { EvaluationsReadIntegrationsResponse, EvaluationsReadMetricProfilesResponse, EvaluationsCreateMetricProfileData, EvaluationsCreateMetricProfileResponse, EvaluationsReadMetricCatalogResponse, EvaluationsUpdateMetricProfileData, EvaluationsUpdateMetricProfileResponse, EvaluationsReadEndpointsResponse, EvaluationsCreateEndpointData, EvaluationsCreateEndpointResponse, EvaluationsUpdateEndpointData, EvaluationsUpdateEndpointResponse, EvaluationsDisableEndpointData, EvaluationsDisableEndpointResponse, EvaluationsReadDatasetsData, EvaluationsReadDatasetsResponse, EvaluationsCreateDatasetData, EvaluationsCreateDatasetResponse, EvaluationsImportDatasetRowsData, EvaluationsImportDatasetRowsResponse, EvaluationsReadDatasetData, EvaluationsReadDatasetResponse, EvaluationsUpdateDatasetData, EvaluationsUpdateDatasetResponse, EvaluationsDeleteDatasetData, EvaluationsDeleteDatasetResponse, EvaluationsCreateDatasetRowData, EvaluationsCreateDatasetRowResponse, EvaluationsUpdateDatasetRowData, EvaluationsUpdateDatasetRowResponse, EvaluationsDeleteDatasetRowData, EvaluationsDeleteDatasetRowResponse, EvaluationsRunSavedDatasetData, EvaluationsRunSavedDatasetResponse, EvaluationsReadSavedRunsData, EvaluationsReadSavedRunsResponse, EvaluationsReadSavedRunData, EvaluationsReadSavedRunResponse, EvaluationsReadScenariosData, EvaluationsReadScenariosResponse, EvaluationsCreateScenarioData, EvaluationsCreateScenarioResponse, EvaluationsImportScenarioData, EvaluationsImportScenarioResponse, EvaluationsReadScenarioData, EvaluationsReadScenarioResponse, EvaluationsUpdateScenarioData, EvaluationsUpdateScenarioResponse, EvaluationsDeleteScenarioData, EvaluationsDeleteScenarioResponse, EvaluationsRunScenarioData, EvaluationsRunScenarioResponse, EvaluationsReadScenarioRunsData, EvaluationsReadScenarioRunsResponse, EvaluationsRunEvaluationData, EvaluationsRunEvaluationResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, PrivateCreateUserData, PrivateCreateUserResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+
+export class EvaluationsService {
+    /**
+     * Read Integrations
+     * @returns IntegrationsResponse Successful Response
+     * @throws ApiError
+     */
+    public static readIntegrations(): CancelablePromise<EvaluationsReadIntegrationsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/integrations'
+        });
+    }
+
+    /**
+     * Read Metric Profiles
+     * @returns EvaluationMetricProfilesPublic Successful Response
+     * @throws ApiError
+     */
+    public static readMetricProfiles(): CancelablePromise<EvaluationsReadMetricProfilesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/metric-profiles'
+        });
+    }
+
+    /**
+     * Create Metric Profile
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns EvaluationMetricProfilePublic Successful Response
+     * @throws ApiError
+     */
+    public static createMetricProfile(data: EvaluationsCreateMetricProfileData): CancelablePromise<EvaluationsCreateMetricProfileResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/metric-profiles',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Metric Catalog
+     * @returns EvaluationMetricCatalogPublic Successful Response
+     * @throws ApiError
+     */
+    public static readMetricCatalog(): CancelablePromise<EvaluationsReadMetricCatalogResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/metric-catalog'
+        });
+    }
+
+    /**
+     * Update Metric Profile
+     * @param data The data for the request.
+     * @param data.profileId
+     * @param data.requestBody
+     * @returns EvaluationMetricProfilePublic Successful Response
+     * @throws ApiError
+     */
+    public static updateMetricProfile(data: EvaluationsUpdateMetricProfileData): CancelablePromise<EvaluationsUpdateMetricProfileResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/metric-profiles/{profile_id}',
+            path: {
+                profile_id: data.profileId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Endpoints
+     * @returns EvaluationEndpointsPublic Successful Response
+     * @throws ApiError
+     */
+    public static readEndpoints(): CancelablePromise<EvaluationsReadEndpointsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/endpoints'
+        });
+    }
+
+    /**
+     * Create Endpoint
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns EvaluationEndpointPublic Successful Response
+     * @throws ApiError
+     */
+    public static createEndpoint(data: EvaluationsCreateEndpointData): CancelablePromise<EvaluationsCreateEndpointResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/endpoints',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Update Endpoint
+     * @param data The data for the request.
+     * @param data.endpointId
+     * @param data.requestBody
+     * @returns EvaluationEndpointPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateEndpoint(data: EvaluationsUpdateEndpointData): CancelablePromise<EvaluationsUpdateEndpointResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/endpoints/{endpoint_id}',
+            path: {
+                endpoint_id: data.endpointId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Disable Endpoint
+     * @param data The data for the request.
+     * @param data.endpointId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static disableEndpoint(data: EvaluationsDisableEndpointData): CancelablePromise<EvaluationsDisableEndpointResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/evaluations/endpoints/{endpoint_id}',
+            path: {
+                endpoint_id: data.endpointId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Datasets
+     * @param data The data for the request.
+     * @param data.evaluationType
+     * @param data.offset
+     * @param data.limit
+     * @returns EvaluationDatasetsPublic Successful Response
+     * @throws ApiError
+     */
+    public static readDatasets(data: EvaluationsReadDatasetsData = {}): CancelablePromise<EvaluationsReadDatasetsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/datasets',
+            query: {
+                evaluation_type: data.evaluationType,
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Create Dataset
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns EvaluationDatasetPublic Successful Response
+     * @throws ApiError
+     */
+    public static createDataset(data: EvaluationsCreateDatasetData): CancelablePromise<EvaluationsCreateDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/datasets',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Import Dataset Rows
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.formData
+     * @returns EvaluationDatasetImportResult Successful Response
+     * @throws ApiError
+     */
+    public static importDatasetRows(data: EvaluationsImportDatasetRowsData): CancelablePromise<EvaluationsImportDatasetRowsResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/import',
+            path: {
+                dataset_id: data.datasetId
+            },
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Dataset
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.offset
+     * @param data.limit
+     * @returns EvaluationDatasetPublic Successful Response
+     * @throws ApiError
+     */
+    public static readDataset(data: EvaluationsReadDatasetData): CancelablePromise<EvaluationsReadDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/datasets/{dataset_id}',
+            path: {
+                dataset_id: data.datasetId
+            },
+            query: {
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Update Dataset
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.requestBody
+     * @returns EvaluationDatasetPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateDataset(data: EvaluationsUpdateDatasetData): CancelablePromise<EvaluationsUpdateDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/datasets/{dataset_id}',
+            path: {
+                dataset_id: data.datasetId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Delete Dataset
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteDataset(data: EvaluationsDeleteDatasetData): CancelablePromise<EvaluationsDeleteDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/evaluations/datasets/{dataset_id}',
+            path: {
+                dataset_id: data.datasetId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Create Dataset Row
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.requestBody
+     * @returns EvaluationDatasetRowPublic Successful Response
+     * @throws ApiError
+     */
+    public static createDatasetRow(data: EvaluationsCreateDatasetRowData): CancelablePromise<EvaluationsCreateDatasetRowResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/rows',
+            path: {
+                dataset_id: data.datasetId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Update Dataset Row
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.rowId
+     * @param data.requestBody
+     * @returns EvaluationDatasetRowPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateDatasetRow(data: EvaluationsUpdateDatasetRowData): CancelablePromise<EvaluationsUpdateDatasetRowResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/rows/{row_id}',
+            path: {
+                dataset_id: data.datasetId,
+                row_id: data.rowId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Delete Dataset Row
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.rowId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteDatasetRow(data: EvaluationsDeleteDatasetRowData): CancelablePromise<EvaluationsDeleteDatasetRowResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/rows/{row_id}',
+            path: {
+                dataset_id: data.datasetId,
+                row_id: data.rowId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Run Saved Dataset
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.baselineRunId
+     * @returns SavedRun Successful Response
+     * @throws ApiError
+     */
+    public static runSavedDataset(data: EvaluationsRunSavedDatasetData): CancelablePromise<EvaluationsRunSavedDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/run',
+            path: {
+                dataset_id: data.datasetId
+            },
+            query: {
+                baseline_run_id: data.baselineRunId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Saved Runs
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.offset
+     * @param data.limit
+     * @returns SavedRunsPublic Successful Response
+     * @throws ApiError
+     */
+    public static readSavedRuns(data: EvaluationsReadSavedRunsData): CancelablePromise<EvaluationsReadSavedRunsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/runs',
+            path: {
+                dataset_id: data.datasetId
+            },
+            query: {
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Saved Run
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.runId
+     * @param data.offset
+     * @param data.limit
+     * @returns SavedRun Successful Response
+     * @throws ApiError
+     */
+    public static readSavedRun(data: EvaluationsReadSavedRunData): CancelablePromise<EvaluationsReadSavedRunResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/datasets/{dataset_id}/runs/{run_id}',
+            path: {
+                dataset_id: data.datasetId,
+                run_id: data.runId
+            },
+            query: {
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Scenarios
+     * @param data The data for the request.
+     * @param data.offset
+     * @param data.limit
+     * @returns EvaluationScenariosPublic Successful Response
+     * @throws ApiError
+     */
+    public static readScenarios(data: EvaluationsReadScenariosData = {}): CancelablePromise<EvaluationsReadScenariosResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/scenarios',
+            query: {
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Create Scenario
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns EvaluationScenarioPublic Successful Response
+     * @throws ApiError
+     */
+    public static createScenario(data: EvaluationsCreateScenarioData): CancelablePromise<EvaluationsCreateScenarioResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/scenarios',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Import Scenario
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns EvaluationScenarioPublic Successful Response
+     * @throws ApiError
+     */
+    public static importScenario(data: EvaluationsImportScenarioData): CancelablePromise<EvaluationsImportScenarioResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/scenarios/import',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Scenario
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @returns EvaluationScenarioPublic Successful Response
+     * @throws ApiError
+     */
+    public static readScenario(data: EvaluationsReadScenarioData): CancelablePromise<EvaluationsReadScenarioResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/scenarios/{scenario_id}',
+            path: {
+                scenario_id: data.scenarioId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Update Scenario
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @param data.requestBody
+     * @returns EvaluationScenarioPublic Successful Response
+     * @throws ApiError
+     */
+    public static updateScenario(data: EvaluationsUpdateScenarioData): CancelablePromise<EvaluationsUpdateScenarioResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/scenarios/{scenario_id}',
+            path: {
+                scenario_id: data.scenarioId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Delete Scenario
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteScenario(data: EvaluationsDeleteScenarioData): CancelablePromise<EvaluationsDeleteScenarioResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/evaluations/scenarios/{scenario_id}',
+            path: {
+                scenario_id: data.scenarioId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Run Scenario
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @param data.baselineRunId
+     * @returns ScenarioRunPublic Successful Response
+     * @throws ApiError
+     */
+    public static runScenario(data: EvaluationsRunScenarioData): CancelablePromise<EvaluationsRunScenarioResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/scenarios/{scenario_id}/run',
+            path: {
+                scenario_id: data.scenarioId
+            },
+            query: {
+                baseline_run_id: data.baselineRunId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Scenario Runs
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @param data.limit
+     * @returns ScenarioRunPublic Successful Response
+     * @throws ApiError
+     */
+    public static readScenarioRuns(data: EvaluationsReadScenarioRunsData): CancelablePromise<EvaluationsReadScenarioRunsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/scenarios/{scenario_id}/runs',
+            path: {
+                scenario_id: data.scenarioId
+            },
+            query: {
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Run Evaluation
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns EvaluationSummary Successful Response
+     * @throws ApiError
+     */
+    public static runEvaluation(data: EvaluationsRunEvaluationData): CancelablePromise<EvaluationsRunEvaluationResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/run',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+}
 
 export class ItemsService {
     /**
@@ -28,7 +655,7 @@ export class ItemsService {
             }
         });
     }
-    
+
     /**
      * Create Item
      * Create new item.
@@ -48,7 +675,7 @@ export class ItemsService {
             }
         });
     }
-    
+
     /**
      * Read Item
      * Get item by ID.
@@ -69,7 +696,7 @@ export class ItemsService {
             }
         });
     }
-    
+
     /**
      * Update Item
      * Update an item.
@@ -93,7 +720,7 @@ export class ItemsService {
             }
         });
     }
-    
+
     /**
      * Delete Item
      * Delete an item.
@@ -136,7 +763,7 @@ export class LoginService {
             }
         });
     }
-    
+
     /**
      * Test Token
      * Test access token
@@ -149,7 +776,7 @@ export class LoginService {
             url: '/api/v1/login/test-token'
         });
     }
-    
+
     /**
      * Recover Password
      * Password Recovery
@@ -170,7 +797,7 @@ export class LoginService {
             }
         });
     }
-    
+
     /**
      * Reset Password
      * Reset password
@@ -190,7 +817,7 @@ export class LoginService {
             }
         });
     }
-    
+
     /**
      * Recover Password Html Content
      * HTML Content for Password Recovery
@@ -258,7 +885,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Create User
      * Create new user.
@@ -278,7 +905,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Read User Me
      * Get current user.
@@ -291,7 +918,7 @@ export class UsersService {
             url: '/api/v1/users/me'
         });
     }
-    
+
     /**
      * Delete User Me
      * Delete own user.
@@ -304,7 +931,7 @@ export class UsersService {
             url: '/api/v1/users/me'
         });
     }
-    
+
     /**
      * Update User Me
      * Update own user.
@@ -324,7 +951,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Update Password Me
      * Update own password.
@@ -344,7 +971,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Register User
      * Create new user without the need to be logged in.
@@ -364,7 +991,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Read User By Id
      * Get a specific user by id.
@@ -385,7 +1012,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Update User
      * Update a user.
@@ -409,7 +1036,7 @@ export class UsersService {
             }
         });
     }
-    
+
     /**
      * Delete User
      * Delete a user.
@@ -453,7 +1080,7 @@ export class UtilsService {
             }
         });
     }
-    
+
     /**
      * Health Check
      * @returns boolean Successful Response

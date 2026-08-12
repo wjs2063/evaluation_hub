@@ -1,0 +1,4 @@
+interface:
+  display_name: "EvaluationHub Backend"
+  short_description: "Async FastAPI evaluation APIs and persistence"
+  default_prompt: "$evaluation-hub-backend를 사용해 비동기 EvaluationHub API 변경을 구현하고 검증해줘."

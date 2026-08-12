@@ -1,5 +1,5 @@
 interface:
   display_name: "EvaluationHub Engineering"
-  short_description: "Async EvaluationHub features and verification"
+  short_description: "EvaluationHub architecture and skill routing"
   brand_color: "#F97316"
-  default_prompt: "Use $evaluation-hub to implement and verify this AI evaluation feature with async FastAPI, AsyncSession, and uv."
+  default_prompt: "$evaluation-hub를 사용해 이 평가 기능을 역할별 스킬로 라우팅하고 검증해줘."

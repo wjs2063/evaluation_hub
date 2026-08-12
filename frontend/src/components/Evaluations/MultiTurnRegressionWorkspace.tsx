@@ -60,7 +60,7 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-const scorePercent = (score: number) => Math.round(score * 100)
+const scorePoints = (score: number) => `${(score * 100).toFixed(2)}점`
 
 export function MultiTurnRegressionWorkspace() {
   const { user } = useAuth()
@@ -220,7 +220,7 @@ export function MultiTurnRegressionWorkspace() {
               {runs.map((run) => (
                 <option key={run.id} value={run.id}>
                   {new Date(run.created_at).toLocaleString()} · 종합{" "}
-                  {scorePercent(run.overall_score)}%
+                  {scorePoints(run.overall_score)}
                 </option>
               ))}
             </select>
@@ -275,14 +275,14 @@ export function MultiTurnRegressionWorkspace() {
                 최종 {selectedRun.overall_passed ? "통과" : "실패"}
               </Badge>
               <Badge variant="outline">
-                종합 {scorePercent(selectedRun.overall_score)}%
+                종합 {scorePoints(selectedRun.overall_score)}
               </Badge>
               <Badge variant="outline">
-                턴 평균 {scorePercent(selectedRun.turn_average_score)}%
+                턴 평균 {scorePoints(selectedRun.turn_average_score)}
               </Badge>
               {selectedRun.conversation_score !== null && (
                 <Badge variant="outline">
-                  대화 흐름 {scorePercent(selectedRun.conversation_score)}%
+                  대화 흐름 {scorePoints(selectedRun.conversation_score)}
                 </Badge>
               )}
             </div>
@@ -327,7 +327,7 @@ export function MultiTurnRegressionWorkspace() {
                     >
                       {turn.output_changed ? "응답 변경" : "변경 없음"} ·{" "}
                       {(turn.score_delta ?? 0) > 0 ? "+" : ""}
-                      {Math.round((turn.score_delta ?? 0) * 100)}p
+                      {((turn.score_delta ?? 0) * 100).toFixed(2)}점
                     </Badge>
                   </div>
                 )}
@@ -351,7 +351,7 @@ export function MultiTurnRegressionWorkspace() {
                     className="mt-3"
                     variant={turn.passed ? "secondary" : "destructive"}
                   >
-                    {scorePercent(turn.score)}%
+                    {scorePoints(turn.score)}
                   </Badge>
                   {turn.reason && (
                     <p className="mt-2 text-xs text-muted-foreground">

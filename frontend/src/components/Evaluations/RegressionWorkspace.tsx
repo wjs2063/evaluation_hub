@@ -186,7 +186,7 @@ export function RegressionWorkspace() {
               {runs.map((run) => (
                 <option key={run.id} value={run.id}>
                   {new Date(run.created_at).toLocaleString()} · 평균{" "}
-                  {(run.average_score * 100).toFixed(2)}%
+                  {(run.average_score * 100).toFixed(2)}점
                 </option>
               ))}
             </select>
@@ -236,7 +236,7 @@ export function RegressionWorkspace() {
                 통과 {selectedRun.passed}/{selectedRun.total}
               </Badge>
               <Badge variant="outline">
-                평균 {(selectedRun.average_score * 100).toFixed(2)}%
+                평균 {(selectedRun.average_score * 100).toFixed(2)}점
               </Badge>
             </div>
           </div>
@@ -268,7 +268,7 @@ export function RegressionWorkspace() {
                     >
                       {row.output_changed ? "응답 변경" : "변경 없음"} ·{" "}
                       {row.score_delta && row.score_delta > 0 ? "+" : ""}
-                      {((row.score_delta ?? 0) * 100).toFixed(2)}p
+                      {((row.score_delta ?? 0) * 100).toFixed(2)}점
                     </Badge>
                   </div>
                 )}

@@ -51,8 +51,13 @@ const runDetail = {
       error: null,
       metrics: [
         {
-          name: "deepeval_geval",
+          name: "toxicity",
+          display_name: "유해성 안전성",
           score: 0.825,
+          raw_score: 0.175,
+          score_direction: "lower_is_better",
+          weight_percent: 70,
+          weighted_score: 0.5775,
           reason: "핵심 내용이 일치합니다.\n표현도 자연스럽습니다.",
         },
         {
@@ -115,9 +120,13 @@ async function mockEvaluationApi(page: Page) {
 }
 
 async function expectEvaluationDetails(page: Page) {
-  await expect(page.getByText("통과 · 82.50%", { exact: true })).toBeVisible()
+  await expect(page.getByText("통과 · 82.50점", { exact: true })).toBeVisible()
+  await expect(page.getByText("유해성 안전성", { exact: true })).toBeVisible()
+  await expect(page.getByText("가중치 70% · 최종 기여 57.75점")).toBeVisible()
   await expect(
-    page.getByText("자연어 응답 정확성", { exact: true }),
+    page.getByText(
+      "DeepEval 원점수 17.50점 · 낮을수록 좋음 · 합산용 품질점수 82.50점",
+    ),
   ).toBeVisible()
   await expect(page.getByText("custom_metric", { exact: true })).toBeVisible()
   await expect(page.getByText("핵심 내용이 일치합니다.")).toBeVisible()

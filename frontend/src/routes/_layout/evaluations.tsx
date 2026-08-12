@@ -41,6 +41,7 @@ export const Route = createFileRoute("/_layout/evaluations")({
 })
 
 const formatPercent = (value: number) => `${Math.round(value * 100)}%`
+const formatScore = (value: number) => `${(value * 100).toFixed(2)}점`
 
 function Evaluations() {
   const [file, setFile] = useState<File | null>(null)
@@ -133,7 +134,7 @@ function Evaluations() {
                   통과 기준
                 </label>
                 <span className="font-mono text-xs text-primary">
-                  {formatPercent(threshold)}
+                  {formatScore(threshold)}
                 </span>
               </div>
               <input
@@ -216,7 +217,7 @@ function Evaluations() {
             <div>
               <div className="grid grid-cols-2 gap-px border-b bg-border sm:grid-cols-4">
                 {[
-                  ["평균 점수", formatPercent(result.average_score)],
+                  ["평균 점수", formatScore(result.average_score)],
                   ["통과율", formatPercent(result.pass_rate)],
                   ["통과", String(result.passed)],
                   ["실패", String(result.failed)],
@@ -243,7 +244,7 @@ function Evaluations() {
                         </p>
                       </div>
                       <Badge variant={row.passed ? "secondary" : "destructive"}>
-                        {formatPercent(row.score)}
+                        {formatScore(row.score)}
                       </Badge>
                     </div>
                     <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">

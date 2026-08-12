@@ -2,8 +2,14 @@ import { Badge } from "@/components/ui/badge"
 
 export type EvaluationMetric = {
   name: string
+  display_name?: string | null
   score: number
+  weight_percent?: number | null
+  weighted_score?: number | null
+  raw_score?: number | null
+  score_direction?: string | null
   reason: string | null
+  error?: string | null
 }
 
 type EvaluationDetailsProps = {
@@ -20,7 +26,7 @@ const metricNames: Record<string, string> = {
   deepeval_geval: "자연어 응답 정확성",
 }
 
-const formatScore = (score: number) => `${(score * 100).toFixed(2)}%`
+const formatScore = (score: number) => `${(score * 100).toFixed(2)}점`
 
 export function EvaluationDetails({
   score,
@@ -46,14 +52,30 @@ export function EvaluationDetails({
           >
             <div className="flex items-center justify-between gap-3">
               <p className="font-medium">
-                {metricNames[metric.name] ?? metric.name}
+                {metric.display_name ?? metricNames[metric.name] ?? metric.name}
               </p>
               <span className="tabular-nums text-xs font-semibold">
                 {formatScore(metric.score)}
               </span>
             </div>
+            {metric.weight_percent != null && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                가중치 {metric.weight_percent}%
+                {metric.weighted_score != null &&
+                  ` · 최종 기여 ${formatScore(metric.weighted_score)}`}
+              </p>
+            )}
+            {metric.raw_score != null &&
+              metric.score_direction === "lower_is_better" && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  DeepEval 원점수 {formatScore(metric.raw_score)} · 낮을수록
+                  좋음 · 합산용 품질점수 {formatScore(metric.score)}
+                </p>
+              )}
             <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
-              {metric.reason ?? "평가 이유가 제공되지 않았습니다."}
+              {metric.error ??
+                metric.reason ??
+                "평가 이유가 제공되지 않았습니다."}
             </p>
           </div>
         ))}

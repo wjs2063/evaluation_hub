@@ -1,0 +1,4 @@
+interface:
+  display_name: "EvaluationHub Frontend"
+  short_description: "React evaluation console UX and verification"
+  default_prompt: "$evaluation-hub-frontend를 사용해 React 평가 콘솔 UX를 개선하고 검증해줘."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "EvaluationHub DeepEval"
+  short_description: "DeepEval metric selection and integration"
+  default_prompt: "$evaluation-hub-deepeval을 사용해 알맞은 DeepEval 지표를 선택하고 통합해줘."

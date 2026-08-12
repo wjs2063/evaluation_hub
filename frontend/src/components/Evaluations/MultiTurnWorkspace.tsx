@@ -822,14 +822,15 @@ export function MultiTurnWorkspace() {
                         최종 {run.overall_passed ? "통과" : "실패"}
                       </Badge>
                       <Badge variant="outline">
-                        종합 {Math.round(run.overall_score * 100)}%
+                        종합 {(run.overall_score * 100).toFixed(2)}점
                       </Badge>
                       <Badge variant="outline">
-                        턴 평균 {Math.round(run.turn_average_score * 100)}%
+                        턴 평균 {(run.turn_average_score * 100).toFixed(2)}점
                       </Badge>
                       {run.conversation_score !== null && (
                         <Badge variant="outline">
-                          대화 흐름 {Math.round(run.conversation_score * 100)}%
+                          대화 흐름 {(run.conversation_score * 100).toFixed(2)}
+                          점
                         </Badge>
                       )}
                     </span>
@@ -877,7 +878,7 @@ export function MultiTurnWorkspace() {
                           className="mt-2"
                           variant={turn.passed ? "secondary" : "destructive"}
                         >
-                          {Math.round(turn.score * 100)}%
+                          {(turn.score * 100).toFixed(2)}점
                         </Badge>
                         {turn.reason && (
                           <p className="mt-2 text-muted-foreground">

@@ -1,7 +1,8 @@
 import uuid
 from datetime import UTC, datetime
+from enum import StrEnum
 
-from pydantic import EmailStr, field_validator
+from pydantic import EmailStr, field_validator, model_validator
 from sqlalchemy import JSON, Column, DateTime
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -112,6 +113,111 @@ class ItemsPublic(SQLModel):
     count: int
 
 
+class EvaluationMetricType(StrEnum):
+    GEVAL_CORRECTNESS = "geval_correctness"
+    GEVAL_CLARITY = "geval_clarity"
+    GEVAL_PROFESSIONALISM = "geval_professionalism"
+    ANSWER_RELEVANCY = "answer_relevancy"
+    SUMMARIZATION = "summarization"
+    BIAS = "bias"
+    TOXICITY = "toxicity"
+    PII_LEAKAGE = "pii_leakage"
+    EXACT_MATCH = "exact_match"
+
+
+class EvaluationMetricDefinitionCreate(SQLModel):
+    metric_type: EvaluationMetricType
+    weight_percent: int = Field(ge=1, le=100)
+
+
+class EvaluationMetricProfileBase(SQLModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+    is_active: bool = True
+
+
+class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
+    metrics: list[EvaluationMetricDefinitionCreate] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_metric_set(self) -> EvaluationMetricProfileCreate:
+        keys = [metric.metric_type for metric in self.metrics]
+        if len(keys) != len(set(keys)):
+            raise ValueError("metric keys must be unique within a profile")
+        if sum(metric.weight_percent for metric in self.metrics) != 100:
+            raise ValueError("metric weights must add up to 100 percent")
+        return self
+
+
+class EvaluationMetricProfileUpdate(EvaluationMetricProfileCreate):
+    pass
+
+
+class EvaluationMetricProfile(EvaluationMetricProfileBase, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    version: int = Field(default=1, ge=1)
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    updated_at: datetime = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+class EvaluationMetricProfileItem(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    profile_id: uuid.UUID = Field(
+        foreign_key="evaluationmetricprofile.id", nullable=False, ondelete="CASCADE"
+    )
+    position: int = Field(ge=0)
+    key: str = Field(min_length=2, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    criteria: str = Field(min_length=10, max_length=2000)
+    weight_percent: int = Field(ge=1, le=100)
+    evaluation_params: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+
+
+class EvaluationMetricDefinitionPublic(EvaluationMetricDefinitionCreate):
+    id: uuid.UUID
+    position: int
+    display_name: str
+    description: str
+    required_fields: list[str]
+    score_direction: str
+    uses_llm: bool
+    docs_url: str
+
+
+class EvaluationMetricCatalogItem(SQLModel):
+    metric_type: EvaluationMetricType
+    display_name: str
+    description: str
+    required_fields: list[str]
+    score_direction: str
+    uses_llm: bool
+    docs_url: str
+
+
+class EvaluationMetricCatalogPublic(SQLModel):
+    data: list[EvaluationMetricCatalogItem]
+    count: int
+
+
+class EvaluationMetricProfilePublic(EvaluationMetricProfileBase):
+    id: uuid.UUID
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    metrics: list[EvaluationMetricDefinitionPublic] = Field(default_factory=list)
+
+
+class EvaluationMetricProfilesPublic(SQLModel):
+    data: list[EvaluationMetricProfilePublic]
+    count: int
+
+
 class EvaluationDatasetBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=500)
@@ -119,6 +225,9 @@ class EvaluationDatasetBase(SQLModel):
     endpoint_url: str | None = Field(default=None, max_length=2048)
     endpoint_id: uuid.UUID | None = Field(
         default=None, foreign_key="evaluationendpoint.id", ondelete="SET NULL"
+    )
+    metric_profile_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
     )
     headers: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     body_template: str = Field(default="{{input}}")
@@ -141,6 +250,7 @@ class EvaluationDatasetUpdate(SQLModel):
     description: str | None = Field(default=None, max_length=500)
     endpoint_url: str | None = Field(default=None, max_length=2048)
     endpoint_id: uuid.UUID | None = None
+    metric_profile_id: uuid.UUID | None = None
     headers: dict[str, str] | None = None
     body_template: str | None = None
     response_path: str | None = Field(default=None, max_length=500)
@@ -238,6 +348,13 @@ class EvaluationRun(SQLModel, table=True):
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
     evaluator: str = Field(default="deterministic-baseline-v1", max_length=100)
+    metric_profile_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
+    )
+    metric_profile_version: int | None = None
+    metric_profile_snapshot: dict[str, object] | None = Field(
+        default=None, sa_column=Column(JSON)
+    )
     total: int = 0
     passed: int = 0
     failed: int = 0
@@ -267,6 +384,22 @@ class EvaluationRunRow(SQLModel, table=True):
     metrics: list[dict[str, object]] = Field(
         default_factory=list, sa_column=Column(JSON)
     )
+    error: str | None = Field(default=None, max_length=1000)
+
+
+class EvaluationRunMetricResult(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    run_row_id: uuid.UUID = Field(
+        foreign_key="evaluationrunrow.id", nullable=False, ondelete="CASCADE"
+    )
+    metric_key: str = Field(min_length=2, max_length=64)
+    display_name: str = Field(min_length=1, max_length=100)
+    score: float = Field(ge=0, le=1)
+    raw_score: float | None = Field(default=None, ge=0, le=1)
+    score_direction: str = Field(default="higher_is_better", max_length=32)
+    weight_percent: int = Field(ge=1, le=100)
+    weighted_score: float = Field(ge=0, le=1)
+    reason: str | None = Field(default=None, max_length=2000)
     error: str | None = Field(default=None, max_length=1000)
 
 
@@ -428,6 +561,7 @@ class EvaluationDatasetPublic(SQLModel):
     description: str | None
     evaluation_type: str
     endpoint_id: uuid.UUID | None
+    metric_profile_id: uuid.UUID | None
     body_template: str
     response_path: str | None
     threshold: float
