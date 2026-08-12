@@ -27,6 +27,19 @@ export const Body_evaluations_import_scenarioSchema = {
     title: 'Body_evaluations-import_scenario'
 } as const;
 
+export const Body_evaluations_import_single_turn_datasetSchema = {
+    properties: {
+        file: {
+            type: 'string',
+            contentMediaType: 'application/octet-stream',
+            title: 'File'
+        }
+    },
+    type: 'object',
+    required: ['file'],
+    title: 'Body_evaluations-import_single_turn_dataset'
+} as const;
+
 export const Body_evaluations_run_evaluationSchema = {
     properties: {
         file: {
@@ -133,7 +146,7 @@ export const EvaluationDatasetCreateSchema = {
         },
         evaluation_type: {
             type: 'string',
-            maxLength: 32,
+            const: 'single_turn',
             title: 'Evaluation Type',
             default: 'single_turn'
         },
@@ -183,7 +196,7 @@ export const EvaluationDatasetCreateSchema = {
         body_template: {
             type: 'string',
             title: 'Body Template',
-            default: '{{input}}'
+            default: '{"input":"{{input}}"}'
         },
         response_path: {
             anyOf: [
@@ -251,6 +264,30 @@ export const EvaluationDatasetPublicSchema = {
             format: 'uuid',
             title: 'Owner Id'
         },
+        created_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By Id'
+        },
+        updated_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Updated By Id'
+        },
         created_at: {
             type: 'string',
             format: 'date-time',
@@ -278,7 +315,13 @@ export const EvaluationDatasetPublicSchema = {
         },
         evaluation_type: {
             type: 'string',
+            const: 'single_turn',
             title: 'Evaluation Type'
+        },
+        test_type: {
+            type: 'string',
+            const: 'single_turn',
+            title: 'Test Type'
         },
         endpoint_id: {
             anyOf: [
@@ -341,7 +384,7 @@ export const EvaluationDatasetPublicSchema = {
         }
     },
     type: 'object',
-    required: ['id', 'owner_id', 'created_at', 'updated_at', 'name', 'description', 'evaluation_type', 'endpoint_id', 'metric_profile_id', 'body_template', 'response_path', 'threshold', 'evaluator'],
+    required: ['id', 'owner_id', 'created_by_id', 'updated_by_id', 'created_at', 'updated_at', 'name', 'description', 'evaluation_type', 'test_type', 'endpoint_id', 'metric_profile_id', 'body_template', 'response_path', 'threshold', 'evaluator'],
     title: 'EvaluationDatasetPublic'
 } as const;
 
@@ -354,6 +397,43 @@ export const EvaluationDatasetRowCreateSchema = {
         expected_output: {
             type: 'string',
             title: 'Expected Output'
+        },
+        request_headers: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'string'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Request Headers'
+        },
+        request_body: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Request Body'
+        },
+        response_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Response Path'
         }
     },
     type: 'object',
@@ -370,6 +450,43 @@ export const EvaluationDatasetRowPublicSchema = {
         expected_output: {
             type: 'string',
             title: 'Expected Output'
+        },
+        request_headers: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'string'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Request Headers'
+        },
+        request_body: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Request Body'
+        },
+        response_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Response Path'
         },
         id: {
             type: 'string',
@@ -395,17 +512,147 @@ export const EvaluationDatasetRowPublicSchema = {
 export const EvaluationDatasetRowUpdateSchema = {
     properties: {
         input: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Input'
         },
         expected_output: {
-            type: 'string',
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
             title: 'Expected Output'
+        },
+        request_headers: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'string'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Request Headers'
+        },
+        request_body: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Request Body'
+        },
+        response_path: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Response Path'
         }
     },
     type: 'object',
-    required: ['input', 'expected_output'],
     title: 'EvaluationDatasetRowUpdate'
+} as const;
+
+export const EvaluationDatasetScheduleCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        schedule_type: {
+            '$ref': '#/components/schemas/EvaluationScheduleType',
+            default: 'interval'
+        },
+        interval_seconds: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 31536000,
+                    minimum: 60
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Interval Seconds'
+        },
+        cron_expression: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 5
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron Expression'
+        },
+        timezone: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Timezone',
+            default: 'Asia/Seoul'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active',
+            default: true
+        },
+        next_run_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Next Run At'
+        },
+        baseline_run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Baseline Run Id'
+        }
+    },
+    type: 'object',
+    required: ['name'],
+    title: 'EvaluationDatasetScheduleCreate'
 } as const;
 
 export const EvaluationDatasetUpdateSchema = {
@@ -711,6 +958,136 @@ export const EvaluationEndpointsPublicSchema = {
     title: 'EvaluationEndpointsPublic'
 } as const;
 
+export const EvaluationJobPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        dataset_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dataset Id'
+        },
+        scenario_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scenario Id'
+        },
+        baseline_run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Baseline Run Id'
+        },
+        schedule_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Schedule Id'
+        },
+        status: {
+            type: 'string',
+            title: 'Status'
+        },
+        scheduled_for: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Scheduled For'
+        },
+        attempt: {
+            type: 'integer',
+            title: 'Attempt'
+        },
+        max_attempts: {
+            type: 'integer',
+            title: 'Max Attempts'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Run Id'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        started_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Started At'
+        },
+        finished_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Finished At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'dataset_id', 'scenario_id', 'baseline_run_id', 'schedule_id', 'status', 'scheduled_for', 'attempt', 'max_attempts', 'error', 'created_at', 'started_at', 'finished_at'],
+    title: 'EvaluationJobPublic'
+} as const;
+
 export const EvaluationMetricCatalogItemSchema = {
     properties: {
         metric_type: {
@@ -1000,6 +1377,37 @@ export const EvaluationMetricTypeSchema = {
     title: 'EvaluationMetricType'
 } as const;
 
+export const EvaluationRequestDocumentSchema = {
+    properties: {
+        headers: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Headers'
+        },
+        body: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Body'
+        },
+        actual_output_json_pointer: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Actual Output Json Pointer'
+        }
+    },
+    type: 'object',
+    required: ['headers', 'body', 'actual_output_json_pointer'],
+    title: 'EvaluationRequestDocument'
+} as const;
+
 export const EvaluationRowSchema = {
     properties: {
         index: {
@@ -1084,6 +1492,12 @@ export const EvaluationScenarioCreateSchema = {
             title: 'Evaluator',
             default: 'deepeval'
         },
+        test_type: {
+            type: 'string',
+            const: 'multi_turn',
+            title: 'Test Type',
+            default: 'multi_turn'
+        },
         turns: {
             items: {
                 '$ref': '#/components/schemas/EvaluationScenarioTurnCreate'
@@ -1137,6 +1551,16 @@ export const EvaluationScenarioPublicSchema = {
             title: 'Evaluator',
             default: 'deepeval'
         },
+        test_type: {
+            type: 'string',
+            const: 'multi_turn',
+            title: 'Test Type'
+        },
+        evaluation_type: {
+            type: 'string',
+            const: 'multi_turn',
+            title: 'Evaluation Type'
+        },
         id: {
             type: 'string',
             format: 'uuid',
@@ -1146,6 +1570,30 @@ export const EvaluationScenarioPublicSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Owner Id'
+        },
+        created_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created By Id'
+        },
+        updated_by_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Updated By Id'
         },
         created_at: {
             type: 'string',
@@ -1171,7 +1619,7 @@ export const EvaluationScenarioPublicSchema = {
         }
     },
     type: 'object',
-    required: ['name', 'endpoint_id', 'id', 'owner_id', 'created_at', 'updated_at'],
+    required: ['name', 'endpoint_id', 'test_type', 'evaluation_type', 'id', 'owner_id', 'created_by_id', 'updated_by_id', 'created_at', 'updated_at'],
     title: 'EvaluationScenarioPublic'
 } as const;
 
@@ -1374,6 +1822,392 @@ export const EvaluationScenariosPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'EvaluationScenariosPublic'
+} as const;
+
+export const EvaluationScheduleCreateSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        schedule_type: {
+            '$ref': '#/components/schemas/EvaluationScheduleType',
+            default: 'interval'
+        },
+        interval_seconds: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 31536000,
+                    minimum: 60
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Interval Seconds'
+        },
+        cron_expression: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 5
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron Expression'
+        },
+        timezone: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Timezone',
+            default: 'Asia/Seoul'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active',
+            default: true
+        },
+        target_type: {
+            '$ref': '#/components/schemas/EvaluationScheduleTargetType'
+        },
+        target_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Id'
+        },
+        next_run_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Next Run At'
+        },
+        baseline_run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Baseline Run Id'
+        }
+    },
+    type: 'object',
+    required: ['name', 'target_type', 'target_id'],
+    title: 'EvaluationScheduleCreate'
+} as const;
+
+export const EvaluationSchedulePublicSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        schedule_type: {
+            '$ref': '#/components/schemas/EvaluationScheduleType',
+            default: 'interval'
+        },
+        interval_seconds: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 31536000,
+                    minimum: 60
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Interval Seconds'
+        },
+        cron_expression: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 5
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron Expression'
+        },
+        timezone: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Timezone',
+            default: 'Asia/Seoul'
+        },
+        is_active: {
+            type: 'boolean',
+            title: 'Is Active',
+            default: true
+        },
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        owner_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Owner Id'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
+        },
+        target_type: {
+            '$ref': '#/components/schemas/EvaluationScheduleTargetType'
+        },
+        target_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Target Id'
+        },
+        target_name: {
+            type: 'string',
+            title: 'Target Name'
+        },
+        target_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Description'
+        },
+        dataset_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dataset Id'
+        },
+        scenario_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scenario Id'
+        },
+        baseline_run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Baseline Run Id'
+        },
+        next_run_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Next Run At'
+        },
+        last_enqueued_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Last Enqueued At'
+        },
+        created_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Created At'
+        },
+        updated_at: {
+            type: 'string',
+            format: 'date-time',
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['name', 'id', 'owner_id', 'target_type', 'target_id', 'target_name', 'dataset_id', 'scenario_id', 'baseline_run_id', 'next_run_at', 'last_enqueued_at', 'created_at', 'updated_at'],
+    title: 'EvaluationSchedulePublic'
+} as const;
+
+export const EvaluationScheduleTargetTypeSchema = {
+    type: 'string',
+    enum: ['single_turn', 'multi_turn'],
+    title: 'EvaluationScheduleTargetType'
+} as const;
+
+export const EvaluationScheduleTypeSchema = {
+    type: 'string',
+    enum: ['interval', 'cron'],
+    title: 'EvaluationScheduleType'
+} as const;
+
+export const EvaluationScheduleUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        schedule_type: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/EvaluationScheduleType'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        interval_seconds: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 31536000,
+                    minimum: 60
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Interval Seconds'
+        },
+        cron_expression: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 5
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Cron Expression'
+        },
+        timezone: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 100,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Timezone'
+        },
+        is_active: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Is Active'
+        },
+        next_run_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Next Run At'
+        },
+        baseline_run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Baseline Run Id'
+        }
+    },
+    type: 'object',
+    title: 'EvaluationScheduleUpdate'
+} as const;
+
+export const EvaluationSchedulesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/EvaluationSchedulePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'EvaluationSchedulesPublic'
 } as const;
 
 export const EvaluationSummarySchema = {
@@ -1704,6 +2538,122 @@ export const MetricScoreSchema = {
     title: 'MetricScore'
 } as const;
 
+export const MultiTurnDatasetCaseDocumentSchema = {
+    properties: {
+        identifier: {
+            type: 'string',
+            maxLength: 100,
+            minLength: 1,
+            title: 'Identifier'
+        },
+        request: {
+            '$ref': '#/components/schemas/MultiTurnRequestDocument'
+        },
+        expected_output: {
+            type: 'string',
+            title: 'Expected Output'
+        }
+    },
+    type: 'object',
+    required: ['identifier', 'request', 'expected_output'],
+    title: 'MultiTurnDatasetCaseDocument'
+} as const;
+
+export const MultiTurnDatasetDocumentSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        test_type: {
+            type: 'string',
+            const: 'multi_turn',
+            title: 'Test Type'
+        },
+        endpoint_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Endpoint Id'
+        },
+        threshold: {
+            type: 'number',
+            maximum: 1,
+            minimum: 0,
+            title: 'Threshold',
+            default: 0.7
+        },
+        evaluator: {
+            type: 'string',
+            enum: ['deepeval', 'local'],
+            title: 'Evaluator',
+            default: 'deepeval'
+        },
+        cases: {
+            items: {
+                '$ref': '#/components/schemas/MultiTurnDatasetCaseDocument'
+            },
+            type: 'array',
+            maxItems: 100,
+            minItems: 1,
+            title: 'Cases'
+        }
+    },
+    type: 'object',
+    required: ['name', 'test_type', 'endpoint_id', 'cases'],
+    title: 'MultiTurnDatasetDocument'
+} as const;
+
+export const MultiTurnRequestDocumentSchema = {
+    properties: {
+        url: {
+            type: 'string',
+            maxLength: 2048,
+            minLength: 1,
+            title: 'Url'
+        },
+        headers: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Headers'
+        },
+        body: {
+            additionalProperties: true,
+            type: 'object',
+            title: 'Body'
+        },
+        actual_output_json_pointer: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Actual Output Json Pointer'
+        }
+    },
+    type: 'object',
+    required: ['url', 'headers', 'body', 'actual_output_json_pointer'],
+    title: 'MultiTurnRequestDocument'
+} as const;
+
 export const NewPasswordSchema = {
     properties: {
         token: {
@@ -1821,6 +2771,39 @@ export const SavedRunSchema = {
                 }
             ],
             title: 'Metric Profile Version'
+        },
+        dataset_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dataset Name'
+        },
+        dataset_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dataset Description'
+        },
+        executor_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Executor Name'
         },
         created_at: {
             type: 'string',
@@ -2024,6 +3007,39 @@ export const SavedRunSummarySchema = {
             ],
             title: 'Metric Profile Version'
         },
+        dataset_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dataset Name'
+        },
+        dataset_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Dataset Description'
+        },
+        executor_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Executor Name'
+        },
         created_at: {
             type: 'string',
             title: 'Created At'
@@ -2179,6 +3195,39 @@ export const ScenarioRunPublicSchema = {
             type: 'string',
             title: 'Created At'
         },
+        scenario_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scenario Name'
+        },
+        scenario_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scenario Description'
+        },
+        executor_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Executor Name'
+        },
         turns: {
             items: {
                 '$ref': '#/components/schemas/ScenarioRunTurnPublic'
@@ -2190,6 +3239,171 @@ export const ScenarioRunPublicSchema = {
     type: 'object',
     required: ['id', 'scenario_id', 'baseline_run_id', 'total', 'passed', 'failed', 'turn_average_score', 'conversation_score', 'conversation_reason', 'overall_score', 'overall_passed', 'overall_reason', 'average_score', 'evaluator', 'geval_score', 'geval_reason', 'error', 'created_at', 'turns'],
     title: 'ScenarioRunPublic'
+} as const;
+
+export const ScenarioRunSummarySchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        scenario_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Scenario Id'
+        },
+        baseline_run_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Baseline Run Id'
+        },
+        total: {
+            type: 'integer',
+            title: 'Total'
+        },
+        passed: {
+            type: 'integer',
+            title: 'Passed'
+        },
+        failed: {
+            type: 'integer',
+            title: 'Failed'
+        },
+        turn_average_score: {
+            type: 'number',
+            title: 'Turn Average Score'
+        },
+        conversation_score: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Score'
+        },
+        conversation_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conversation Reason'
+        },
+        overall_score: {
+            type: 'number',
+            title: 'Overall Score'
+        },
+        overall_passed: {
+            type: 'boolean',
+            title: 'Overall Passed'
+        },
+        overall_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Overall Reason'
+        },
+        average_score: {
+            type: 'number',
+            title: 'Average Score'
+        },
+        evaluator: {
+            type: 'string',
+            title: 'Evaluator'
+        },
+        geval_score: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Geval Score'
+        },
+        geval_reason: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Geval Reason'
+        },
+        error: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Error'
+        },
+        created_at: {
+            type: 'string',
+            title: 'Created At'
+        },
+        scenario_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scenario Name'
+        },
+        scenario_description: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Scenario Description'
+        },
+        executor_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Executor Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'scenario_id', 'baseline_run_id', 'total', 'passed', 'failed', 'turn_average_score', 'conversation_score', 'conversation_reason', 'overall_score', 'overall_passed', 'overall_reason', 'average_score', 'evaluator', 'geval_score', 'geval_reason', 'error', 'created_at'],
+    title: 'ScenarioRunSummary'
 } as const;
 
 export const ScenarioRunTurnPublicSchema = {
@@ -2308,6 +3522,113 @@ export const ScenarioRunTurnPublicSchema = {
     type: 'object',
     required: ['id', 'position', 'identifier', 'request_body', 'actual_output', 'expected_output', 'response_status', 'response_body', 'score', 'passed', 'reason', 'error'],
     title: 'ScenarioRunTurnPublic'
+} as const;
+
+export const ScenarioRunsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ScenarioRunSummary'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ScenarioRunsPublic'
+} as const;
+
+export const SingleTurnDatasetCaseDocumentSchema = {
+    properties: {
+        input: {
+            type: 'string',
+            title: 'Input'
+        },
+        request: {
+            '$ref': '#/components/schemas/EvaluationRequestDocument'
+        },
+        expected_output: {
+            type: 'string',
+            title: 'Expected Output'
+        }
+    },
+    type: 'object',
+    required: ['input', 'request', 'expected_output'],
+    title: 'SingleTurnDatasetCaseDocument'
+} as const;
+
+export const SingleTurnDatasetDocumentSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            maxLength: 255,
+            minLength: 1,
+            title: 'Name'
+        },
+        description: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 500
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Description'
+        },
+        test_type: {
+            type: 'string',
+            const: 'single_turn',
+            title: 'Test Type'
+        },
+        endpoint_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Endpoint Id'
+        },
+        metric_profile_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Metric Profile Id'
+        },
+        threshold: {
+            type: 'number',
+            maximum: 1,
+            minimum: 0,
+            title: 'Threshold',
+            default: 0.7
+        },
+        evaluator: {
+            type: 'string',
+            enum: ['deepeval', 'local'],
+            title: 'Evaluator',
+            default: 'deepeval'
+        },
+        cases: {
+            items: {
+                '$ref': '#/components/schemas/SingleTurnDatasetCaseDocument'
+            },
+            type: 'array',
+            maxItems: 1000,
+            title: 'Cases'
+        }
+    },
+    type: 'object',
+    required: ['name', 'test_type', 'endpoint_id', 'cases'],
+    title: 'SingleTurnDatasetDocument'
 } as const;
 
 export const TokenSchema = {

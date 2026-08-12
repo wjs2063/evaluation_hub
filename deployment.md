@@ -1,5 +1,8 @@
 # FastAPI Project - Deployment
 
+Frontend, FastAPI, worker, scheduler의 `--no-cache` 빌드와 로컬 실행까지 포함한
+명령은 [통합 실행 및 배포 가이드](run_guide.md)를 참고하세요.
+
 The production entry point is the frontend Nginx container. Browsers use the
 public frontend origin for pages, `/api/v1/...`, `/docs`, and `/redoc`. Nginx
 proxies those backend paths, so normal UI traffic stays same-origin.

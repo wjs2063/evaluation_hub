@@ -11,6 +11,10 @@ export type Body_evaluations_import_scenario = {
     file: string;
 };
 
+export type Body_evaluations_import_single_turn_dataset = {
+    file: string;
+};
+
 export type Body_evaluations_run_evaluation = {
     /**
      * UTF-8 CSV or JSON dataset
@@ -34,7 +38,7 @@ export type Body_login_login_access_token = {
 export type EvaluationDatasetCreate = {
     name: string;
     description?: (string | null);
-    evaluation_type?: string;
+    evaluation_type?: "single_turn";
     endpoint_url?: (string | null);
     endpoint_id?: (string | null);
     metric_profile_id?: (string | null);
@@ -56,11 +60,14 @@ export type EvaluationDatasetImportResult = {
 export type EvaluationDatasetPublic = {
     id: string;
     owner_id: string;
+    created_by_id: (string | null);
+    updated_by_id: (string | null);
     created_at: string;
     updated_at: string;
     name: string;
     description: (string | null);
-    evaluation_type: string;
+    evaluation_type: "single_turn";
+    test_type: "single_turn";
     endpoint_id: (string | null);
     metric_profile_id: (string | null);
     body_template: string;
@@ -74,19 +81,45 @@ export type EvaluationDatasetPublic = {
 export type EvaluationDatasetRowCreate = {
     input: string;
     expected_output: string;
+    request_headers?: ({
+    [key: string]: (string);
+} | null);
+    request_body?: (string | null);
+    response_path?: (string | null);
 };
 
 export type EvaluationDatasetRowPublic = {
     input: string;
     expected_output: string;
+    request_headers?: ({
+    [key: string]: (string);
+} | null);
+    request_body?: (string | null);
+    response_path?: (string | null);
     id: string;
     dataset_id: string;
     created_at: string;
 };
 
 export type EvaluationDatasetRowUpdate = {
-    input: string;
-    expected_output: string;
+    input?: (string | null);
+    expected_output?: (string | null);
+    request_headers?: ({
+    [key: string]: (string);
+} | null);
+    request_body?: (string | null);
+    response_path?: (string | null);
+};
+
+export type EvaluationDatasetScheduleCreate = {
+    name: string;
+    schedule_type?: EvaluationScheduleType;
+    interval_seconds?: (number | null);
+    cron_expression?: (string | null);
+    timezone?: string;
+    is_active?: boolean;
+    next_run_at?: (string | null);
+    baseline_run_id?: (string | null);
 };
 
 export type EvaluationDatasetsPublic = {
@@ -140,6 +173,23 @@ export type EvaluationEndpointUpdate = {
     headers?: ({
     [key: string]: (string);
 } | null);
+};
+
+export type EvaluationJobPublic = {
+    id: string;
+    dataset_id: (string | null);
+    scenario_id: (string | null);
+    baseline_run_id: (string | null);
+    schedule_id: (string | null);
+    status: string;
+    scheduled_for: string;
+    attempt: number;
+    max_attempts: number;
+    error: (string | null);
+    run_id?: (string | null);
+    created_at: string;
+    started_at: (string | null);
+    finished_at: (string | null);
 };
 
 export type EvaluationMetricCatalogItem = {
@@ -207,6 +257,16 @@ export type EvaluationMetricProfileUpdate = {
 
 export type EvaluationMetricType = 'geval_correctness' | 'geval_clarity' | 'geval_professionalism' | 'answer_relevancy' | 'summarization' | 'bias' | 'toxicity' | 'pii_leakage' | 'exact_match';
 
+export type EvaluationRequestDocument = {
+    headers: {
+        [key: string]: (string);
+    };
+    body: {
+        [key: string]: unknown;
+    };
+    actual_output_json_pointer: (string | null);
+};
+
 export type EvaluationRow = {
     index: number;
     input: string;
@@ -223,6 +283,7 @@ export type EvaluationScenarioCreate = {
     endpoint_id?: (string | null);
     threshold?: number;
     evaluator?: string;
+    test_type?: "multi_turn";
     turns: Array<EvaluationScenarioTurnCreate>;
 };
 
@@ -232,8 +293,12 @@ export type EvaluationScenarioPublic = {
     endpoint_id: string;
     threshold?: number;
     evaluator?: string;
+    test_type: "multi_turn";
+    evaluation_type: "multi_turn";
     id: string;
     owner_id: string;
+    created_by_id: (string | null);
+    updated_by_id: (string | null);
     created_at: string;
     updated_at: string;
     turn_count?: number;
@@ -274,6 +339,62 @@ export type EvaluationScenarioUpdate = {
     threshold?: (number | null);
     evaluator?: (string | null);
     turns?: (Array<EvaluationScenarioTurnCreate> | null);
+};
+
+export type EvaluationScheduleCreate = {
+    name: string;
+    schedule_type?: EvaluationScheduleType;
+    interval_seconds?: (number | null);
+    cron_expression?: (string | null);
+    timezone?: string;
+    is_active?: boolean;
+    target_type: EvaluationScheduleTargetType;
+    target_id: string;
+    next_run_at?: (string | null);
+    baseline_run_id?: (string | null);
+};
+
+export type EvaluationSchedulePublic = {
+    name: string;
+    schedule_type?: EvaluationScheduleType;
+    interval_seconds?: (number | null);
+    cron_expression?: (string | null);
+    timezone?: string;
+    is_active?: boolean;
+    id: string;
+    owner_id: string;
+    owner_name?: (string | null);
+    target_type: EvaluationScheduleTargetType;
+    target_id: string;
+    target_name: string;
+    target_description?: (string | null);
+    dataset_id: (string | null);
+    scenario_id: (string | null);
+    baseline_run_id: (string | null);
+    next_run_at: string;
+    last_enqueued_at: (string | null);
+    created_at: string;
+    updated_at: string;
+};
+
+export type EvaluationSchedulesPublic = {
+    data: Array<EvaluationSchedulePublic>;
+    count: number;
+};
+
+export type EvaluationScheduleTargetType = 'single_turn' | 'multi_turn';
+
+export type EvaluationScheduleType = 'interval' | 'cron';
+
+export type EvaluationScheduleUpdate = {
+    name?: (string | null);
+    schedule_type?: (EvaluationScheduleType | null);
+    interval_seconds?: (number | null);
+    cron_expression?: (string | null);
+    timezone?: (string | null);
+    is_active?: (boolean | null);
+    next_run_at?: (string | null);
+    baseline_run_id?: (string | null);
 };
 
 export type EvaluationSummary = {
@@ -343,6 +464,35 @@ export type MetricScore = {
     error?: (string | null);
 };
 
+export type MultiTurnDatasetCaseDocument = {
+    identifier: string;
+    request: MultiTurnRequestDocument;
+    expected_output: string;
+};
+
+export type MultiTurnDatasetDocument = {
+    name: string;
+    description?: (string | null);
+    test_type: "multi_turn";
+    endpoint_id: string;
+    threshold?: number;
+    evaluator?: 'deepeval' | 'local';
+    cases: Array<MultiTurnDatasetCaseDocument>;
+};
+
+export type evaluator = 'deepeval' | 'local';
+
+export type MultiTurnRequestDocument = {
+    url: string;
+    headers: {
+        [key: string]: (string);
+    };
+    body: {
+        [key: string]: unknown;
+    };
+    actual_output_json_pointer: (string | null);
+};
+
 export type NewPassword = {
     token: string;
     new_password: string;
@@ -368,6 +518,9 @@ export type SavedRun = {
     geval_available: boolean;
     metric_profile_id?: (string | null);
     metric_profile_version?: (number | null);
+    dataset_name?: (string | null);
+    dataset_description?: (string | null);
+    executor_name?: (string | null);
     created_at: string;
     rows: Array<SavedRunRow>;
     row_count: number;
@@ -407,6 +560,9 @@ export type SavedRunSummary = {
     geval_available: boolean;
     metric_profile_id?: (string | null);
     metric_profile_version?: (number | null);
+    dataset_name?: (string | null);
+    dataset_description?: (string | null);
+    executor_name?: (string | null);
     created_at: string;
 };
 
@@ -429,7 +585,39 @@ export type ScenarioRunPublic = {
     geval_reason: (string | null);
     error: (string | null);
     created_at: string;
+    scenario_name?: (string | null);
+    scenario_description?: (string | null);
+    executor_name?: (string | null);
     turns: Array<ScenarioRunTurnPublic>;
+};
+
+export type ScenarioRunsPublic = {
+    data: Array<ScenarioRunSummary>;
+    count: number;
+};
+
+export type ScenarioRunSummary = {
+    id: string;
+    scenario_id: string;
+    baseline_run_id: (string | null);
+    total: number;
+    passed: number;
+    failed: number;
+    turn_average_score: number;
+    conversation_score: (number | null);
+    conversation_reason: (string | null);
+    overall_score: number;
+    overall_passed: boolean;
+    overall_reason: (string | null);
+    average_score: number;
+    evaluator: string;
+    geval_score: (number | null);
+    geval_reason: (string | null);
+    error: (string | null);
+    created_at: string;
+    scenario_name?: (string | null);
+    scenario_description?: (string | null);
+    executor_name?: (string | null);
 };
 
 export type ScenarioRunTurnPublic = {
@@ -448,6 +636,23 @@ export type ScenarioRunTurnPublic = {
     baseline_actual_output?: (string | null);
     output_changed?: (boolean | null);
     score_delta?: (number | null);
+};
+
+export type SingleTurnDatasetCaseDocument = {
+    input: string;
+    request: EvaluationRequestDocument;
+    expected_output: string;
+};
+
+export type SingleTurnDatasetDocument = {
+    name: string;
+    description?: (string | null);
+    test_type: "single_turn";
+    endpoint_id: string;
+    metric_profile_id?: (string | null);
+    threshold?: number;
+    evaluator?: 'deepeval' | 'local';
+    cases: Array<SingleTurnDatasetCaseDocument>;
 };
 
 export type Token = {
@@ -552,7 +757,6 @@ export type EvaluationsDisableEndpointData = {
 export type EvaluationsDisableEndpointResponse = (Message);
 
 export type EvaluationsReadDatasetsData = {
-    evaluationType?: (string | null);
     limit?: number;
     offset?: number;
 };
@@ -564,6 +768,12 @@ export type EvaluationsCreateDatasetData = {
 };
 
 export type EvaluationsCreateDatasetResponse = (EvaluationDatasetPublic);
+
+export type EvaluationsImportSingleTurnDatasetData = {
+    formData: Body_evaluations_import_single_turn_dataset;
+};
+
+export type EvaluationsImportSingleTurnDatasetResponse = (EvaluationDatasetPublic);
 
 export type EvaluationsImportDatasetRowsData = {
     datasetId: string;
@@ -593,6 +803,12 @@ export type EvaluationsDeleteDatasetData = {
 
 export type EvaluationsDeleteDatasetResponse = (Message);
 
+export type EvaluationsExportSingleTurnDatasetData = {
+    datasetId: string;
+};
+
+export type EvaluationsExportSingleTurnDatasetResponse = (SingleTurnDatasetDocument);
+
 export type EvaluationsCreateDatasetRowData = {
     datasetId: string;
     requestBody: EvaluationDatasetRowCreate;
@@ -615,12 +831,74 @@ export type EvaluationsDeleteDatasetRowData = {
 
 export type EvaluationsDeleteDatasetRowResponse = (Message);
 
-export type EvaluationsRunSavedDatasetData = {
+export type EvaluationsEnqueueSavedDatasetRunData = {
     baselineRunId?: (string | null);
     datasetId: string;
 };
 
-export type EvaluationsRunSavedDatasetResponse = (SavedRun);
+export type EvaluationsEnqueueSavedDatasetRunResponse = (EvaluationJobPublic);
+
+export type EvaluationsReadEvaluationJobData = {
+    jobId: string;
+};
+
+export type EvaluationsReadEvaluationJobResponse = (EvaluationJobPublic);
+
+export type EvaluationsReadAllEvaluationSchedulesData = {
+    limit?: number;
+    offset?: number;
+};
+
+export type EvaluationsReadAllEvaluationSchedulesResponse = (EvaluationSchedulesPublic);
+
+export type EvaluationsCreateGlobalEvaluationScheduleData = {
+    requestBody: EvaluationScheduleCreate;
+};
+
+export type EvaluationsCreateGlobalEvaluationScheduleResponse = (EvaluationSchedulePublic);
+
+export type EvaluationsUpdateGlobalEvaluationScheduleData = {
+    requestBody: EvaluationScheduleUpdate;
+    scheduleId: string;
+};
+
+export type EvaluationsUpdateGlobalEvaluationScheduleResponse = (EvaluationSchedulePublic);
+
+export type EvaluationsDeleteGlobalEvaluationScheduleData = {
+    scheduleId: string;
+};
+
+export type EvaluationsDeleteGlobalEvaluationScheduleResponse = (Message);
+
+export type EvaluationsReadEvaluationSchedulesData = {
+    datasetId: string;
+    limit?: number;
+    offset?: number;
+};
+
+export type EvaluationsReadEvaluationSchedulesResponse = (EvaluationSchedulesPublic);
+
+export type EvaluationsCreateEvaluationScheduleData = {
+    datasetId: string;
+    requestBody: EvaluationDatasetScheduleCreate;
+};
+
+export type EvaluationsCreateEvaluationScheduleResponse = (EvaluationSchedulePublic);
+
+export type EvaluationsUpdateEvaluationScheduleData = {
+    datasetId: string;
+    requestBody: EvaluationScheduleUpdate;
+    scheduleId: string;
+};
+
+export type EvaluationsUpdateEvaluationScheduleResponse = (EvaluationSchedulePublic);
+
+export type EvaluationsDeleteEvaluationScheduleData = {
+    datasetId: string;
+    scheduleId: string;
+};
+
+export type EvaluationsDeleteEvaluationScheduleResponse = (Message);
 
 export type EvaluationsReadSavedRunsData = {
     datasetId: string;
@@ -638,6 +916,13 @@ export type EvaluationsReadSavedRunData = {
 };
 
 export type EvaluationsReadSavedRunResponse = (SavedRun);
+
+export type EvaluationsDownloadSavedRunReportData = {
+    datasetId: string;
+    runId: string;
+};
+
+export type EvaluationsDownloadSavedRunReportResponse = (string);
 
 export type EvaluationsReadScenariosData = {
     limit?: number;
@@ -677,6 +962,12 @@ export type EvaluationsDeleteScenarioData = {
 
 export type EvaluationsDeleteScenarioResponse = (Message);
 
+export type EvaluationsExportMultiTurnDatasetData = {
+    scenarioId: string;
+};
+
+export type EvaluationsExportMultiTurnDatasetResponse = (MultiTurnDatasetDocument);
+
 export type EvaluationsRunScenarioData = {
     baselineRunId?: (string | null);
     scenarioId: string;
@@ -686,10 +977,18 @@ export type EvaluationsRunScenarioResponse = (ScenarioRunPublic);
 
 export type EvaluationsReadScenarioRunsData = {
     limit?: number;
+    offset?: number;
     scenarioId: string;
 };
 
-export type EvaluationsReadScenarioRunsResponse = (Array<ScenarioRunPublic>);
+export type EvaluationsReadScenarioRunsResponse = (ScenarioRunsPublic);
+
+export type EvaluationsReadScenarioRunData = {
+    runId: string;
+    scenarioId: string;
+};
+
+export type EvaluationsReadScenarioRunResponse = (ScenarioRunPublic);
 
 export type EvaluationsRunEvaluationData = {
     formData: Body_evaluations_run_evaluation;

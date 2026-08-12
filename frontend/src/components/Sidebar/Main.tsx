@@ -15,6 +15,7 @@ import {
 export type SubItem = {
   title: string
   path: string
+  hash?: string
   children?: SubItem[]
 }
 
@@ -50,6 +51,7 @@ export function Main({ items }: MainProps) {
   const { isMobile, setOpenMobile } = useSidebar()
   const router = useRouterState()
   const currentPath = router.location.pathname
+  const currentHash = router.location.hash
 
   const handleMenuClick = () => {
     if (isMobile) {
@@ -62,8 +64,12 @@ export function Main({ items }: MainProps) {
     return groups
   }, {})
 
+  const isExactTargetActive = (item: SubItem) =>
+    currentPath === item.path &&
+    (item.hash ? currentHash === item.hash : currentHash.length === 0)
+
   const isActiveOrDescendant = (item: SubItem) =>
-    currentPath === item.path ||
+    isExactTargetActive(item) ||
     item.children?.some(isActiveOrDescendant) === true
 
   return (
@@ -76,7 +82,7 @@ export function Main({ items }: MainProps) {
           <SidebarGroupContent>
             <SidebarMenu>
               {sectionItems.map((item) => {
-                const isActive = currentPath === item.path
+                const isActive = isExactTargetActive(item)
                 const hasActiveChild = item.children?.some(isActiveOrDescendant)
                 const itemIsActive = isActive || hasActiveChild === true
 
@@ -88,7 +94,11 @@ export function Main({ items }: MainProps) {
                       className="h-9 rounded-md px-2 text-sidebar-foreground/65 hover:bg-white/[0.035] data-[active=true]:bg-transparent data-[active=true]:font-medium data-[active=true]:text-sidebar-foreground"
                       asChild
                     >
-                      <RouterLink to={item.path} onClick={handleMenuClick}>
+                      <RouterLink
+                        to={item.path}
+                        hash={item.hash}
+                        onClick={handleMenuClick}
+                      >
                         <MenuIcon active={itemIsActive} />
                         <span>{item.title}</span>
                       </RouterLink>
@@ -106,6 +116,7 @@ export function Main({ items }: MainProps) {
                               >
                                 <RouterLink
                                   to={child.path}
+                                  hash={child.hash}
                                   onClick={handleMenuClick}
                                 >
                                   <MenuIcon active={childIsActive} />
@@ -128,6 +139,7 @@ export function Main({ items }: MainProps) {
                                         >
                                           <RouterLink
                                             to={grandchild.path}
+                                            hash={grandchild.hash}
                                             onClick={handleMenuClick}
                                           >
                                             <MenuIcon

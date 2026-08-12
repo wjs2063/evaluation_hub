@@ -1,6 +1,6 @@
 import { Link as RouterLink } from "@tanstack/react-router"
 import axios from "axios"
-import { ChevronRight, History, Play } from "lucide-react"
+import { ChevronLeft, ChevronRight, History, Play } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader } from "@/components/Common/PageHeader"
@@ -43,36 +43,57 @@ type Run = {
   baseline_run_id: string | null
   rows?: RunRow[]
 }
+type EvaluationJob = {
+  id: string
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled"
+  run_id: string | null
+  error: string | null
+}
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
+const RUNS_PER_PAGE = 20
 api.interceptors.request.use((config) => {
   config.headers.Authorization = `Bearer ${localStorage.getItem("access_token") ?? ""}`
   return config
 })
 
+const waitForJob = async (jobId: string): Promise<EvaluationJob> => {
+  const deadline = Date.now() + 30 * 60 * 1000
+  while (Date.now() < deadline) {
+    const { data } = await api.get<EvaluationJob>(
+      `/api/v1/evaluations/jobs/${jobId}`,
+    )
+    if (["succeeded", "failed", "cancelled"].includes(data.status)) return data
+    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+  }
+  throw new Error("평가 작업 대기 시간을 초과했습니다.")
+}
+
 export function RegressionWorkspace() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [datasetId, setDatasetId] = useState("")
   const [runs, setRuns] = useState<Run[]>([])
+  const [runCount, setRunCount] = useState(0)
+  const [runPage, setRunPage] = useState(0)
   const [runId, setRunId] = useState("")
   const [baselineRunId, setBaselineRunId] = useState("")
   const [selectedRun, setSelectedRun] = useState<Run | null>(null)
   const [error, setError] = useState("")
   const [isRunning, setIsRunning] = useState(false)
 
-  const loadRuns = useCallback(async (id: string) => {
-    const { data } = await api.get<{ data: Run[] }>(
-      `/api/v1/evaluations/datasets/${id}/runs`,
+  const loadRuns = useCallback(async (id: string, page = 0) => {
+    const { data } = await api.get<{ data: Run[]; count: number }>(
+      `/api/v1/evaluations/single-turn/datasets/${id}/runs`,
+      { params: { offset: page * RUNS_PER_PAGE, limit: RUNS_PER_PAGE } },
     )
     setRuns(data.data)
+    setRunCount(data.count)
     setRunId(data.data[0]?.id ?? "")
   }, [])
 
   useEffect(() => {
     api
-      .get<{ data: Dataset[] }>("/api/v1/evaluations/datasets", {
-        params: { evaluation_type: "single_turn" },
-      })
+      .get<{ data: Dataset[] }>("/api/v1/evaluations/single-turn/datasets")
       .then(({ data }) => {
         setDatasets(data.data)
         const firstId = data.data[0]?.id ?? ""
@@ -88,7 +109,9 @@ export function RegressionWorkspace() {
       return
     }
     api
-      .get<Run>(`/api/v1/evaluations/datasets/${datasetId}/runs/${runId}`)
+      .get<Run>(
+        `/api/v1/evaluations/single-turn/datasets/${datasetId}/runs/${runId}`,
+      )
       .then(({ data }) => setSelectedRun(data))
       .catch(() => setError("실행 상세 결과를 불러오지 못했습니다."))
   }, [datasetId, runId])
@@ -98,17 +121,23 @@ export function RegressionWorkspace() {
     try {
       setIsRunning(true)
       setError("")
-      const { data } = await api.post<Run>(
-        `/api/v1/evaluations/datasets/${datasetId}/run`,
+      const { data: queuedJob } = await api.post<EvaluationJob>(
+        `/api/v1/evaluations/single-turn/datasets/${datasetId}/run`,
         undefined,
         { params: { baseline_run_id: baselineRunId || undefined } },
       )
+      const job = await waitForJob(queuedJob.id)
+      if (job.status !== "succeeded" || !job.run_id) {
+        throw new Error(job.error ?? "회귀 평가 작업이 실패했습니다.")
+      }
       await loadRuns(datasetId)
-      setRunId(data.id)
+      setRunId(job.run_id)
     } catch (requestError) {
       const detail = axios.isAxiosError(requestError)
         ? requestError.response?.data?.detail
-        : null
+        : requestError instanceof Error
+          ? requestError.message
+          : null
       setError(detail ?? "회귀 테스트 실행에 실패했습니다.")
     } finally {
       setIsRunning(false)
@@ -160,6 +189,7 @@ export function RegressionWorkspace() {
               onChange={(event) => {
                 const id = event.target.value
                 setDatasetId(id)
+                setRunPage(0)
                 loadRuns(id).catch(() =>
                   setError("실행 이력을 불러오지 못했습니다."),
                 )
@@ -220,6 +250,40 @@ export function RegressionWorkspace() {
               시작하세요.
             </p>
           </div>
+          {runCount > RUNS_PER_PAGE && (
+            <div className="flex items-center justify-between border-t p-4 text-xs text-muted-foreground">
+              <span>
+                총 {runCount.toLocaleString()}건 · {runPage + 1}/
+                {Math.ceil(runCount / RUNS_PER_PAGE)} 페이지
+              </span>
+              <div className="flex gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={runPage === 0}
+                  onClick={() => {
+                    const next = Math.max(0, runPage - 1)
+                    setRunPage(next)
+                    void loadRuns(datasetId, next)
+                  }}
+                >
+                  <ChevronLeft /> 이전
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={(runPage + 1) * RUNS_PER_PAGE >= runCount}
+                  onClick={() => {
+                    const next = runPage + 1
+                    setRunPage(next)
+                    void loadRuns(datasetId, next)
+                  }}
+                >
+                  다음 <ChevronRight />
+                </Button>
+              </div>
+            </div>
+          )}
         </section>
       )}
       {selectedRun && (

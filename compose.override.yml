@@ -49,6 +49,34 @@ services:
       SMTP_TLS: "false"
       EMAILS_FROM_EMAIL: noreply@example.com
 
+  worker:
+    restart: "no"
+    command: python -m app.worker
+    develop:
+      watch:
+        - path: ./backend
+          action: sync+restart
+          target: /app/backend
+          ignore:
+            - ./backend/.venv
+            - .venv
+    environment:
+      POSTGRES_SERVER: db
+
+  scheduler:
+    restart: "no"
+    command: python -m app.scheduler
+    develop:
+      watch:
+        - path: ./backend
+          action: sync+restart
+          target: /app/backend
+          ignore:
+            - ./backend/.venv
+            - .venv
+    environment:
+      POSTGRES_SERVER: db
+
   mailcatcher:
     image: schickling/mailcatcher
     ports:

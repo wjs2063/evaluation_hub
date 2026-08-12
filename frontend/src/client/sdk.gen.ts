@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { EvaluationsReadIntegrationsResponse, EvaluationsReadMetricProfilesResponse, EvaluationsCreateMetricProfileData, EvaluationsCreateMetricProfileResponse, EvaluationsReadMetricCatalogResponse, EvaluationsUpdateMetricProfileData, EvaluationsUpdateMetricProfileResponse, EvaluationsReadEndpointsResponse, EvaluationsCreateEndpointData, EvaluationsCreateEndpointResponse, EvaluationsUpdateEndpointData, EvaluationsUpdateEndpointResponse, EvaluationsDisableEndpointData, EvaluationsDisableEndpointResponse, EvaluationsReadDatasetsData, EvaluationsReadDatasetsResponse, EvaluationsCreateDatasetData, EvaluationsCreateDatasetResponse, EvaluationsImportDatasetRowsData, EvaluationsImportDatasetRowsResponse, EvaluationsReadDatasetData, EvaluationsReadDatasetResponse, EvaluationsUpdateDatasetData, EvaluationsUpdateDatasetResponse, EvaluationsDeleteDatasetData, EvaluationsDeleteDatasetResponse, EvaluationsCreateDatasetRowData, EvaluationsCreateDatasetRowResponse, EvaluationsUpdateDatasetRowData, EvaluationsUpdateDatasetRowResponse, EvaluationsDeleteDatasetRowData, EvaluationsDeleteDatasetRowResponse, EvaluationsRunSavedDatasetData, EvaluationsRunSavedDatasetResponse, EvaluationsReadSavedRunsData, EvaluationsReadSavedRunsResponse, EvaluationsReadSavedRunData, EvaluationsReadSavedRunResponse, EvaluationsReadScenariosData, EvaluationsReadScenariosResponse, EvaluationsCreateScenarioData, EvaluationsCreateScenarioResponse, EvaluationsImportScenarioData, EvaluationsImportScenarioResponse, EvaluationsReadScenarioData, EvaluationsReadScenarioResponse, EvaluationsUpdateScenarioData, EvaluationsUpdateScenarioResponse, EvaluationsDeleteScenarioData, EvaluationsDeleteScenarioResponse, EvaluationsRunScenarioData, EvaluationsRunScenarioResponse, EvaluationsReadScenarioRunsData, EvaluationsReadScenarioRunsResponse, EvaluationsRunEvaluationData, EvaluationsRunEvaluationResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, PrivateCreateUserData, PrivateCreateUserResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { EvaluationsReadIntegrationsResponse, EvaluationsReadMetricProfilesResponse, EvaluationsCreateMetricProfileData, EvaluationsCreateMetricProfileResponse, EvaluationsReadMetricCatalogResponse, EvaluationsUpdateMetricProfileData, EvaluationsUpdateMetricProfileResponse, EvaluationsReadEndpointsResponse, EvaluationsCreateEndpointData, EvaluationsCreateEndpointResponse, EvaluationsUpdateEndpointData, EvaluationsUpdateEndpointResponse, EvaluationsDisableEndpointData, EvaluationsDisableEndpointResponse, EvaluationsReadDatasetsData, EvaluationsReadDatasetsResponse, EvaluationsCreateDatasetData, EvaluationsCreateDatasetResponse, EvaluationsImportSingleTurnDatasetData, EvaluationsImportSingleTurnDatasetResponse, EvaluationsImportDatasetRowsData, EvaluationsImportDatasetRowsResponse, EvaluationsReadDatasetData, EvaluationsReadDatasetResponse, EvaluationsUpdateDatasetData, EvaluationsUpdateDatasetResponse, EvaluationsDeleteDatasetData, EvaluationsDeleteDatasetResponse, EvaluationsExportSingleTurnDatasetData, EvaluationsExportSingleTurnDatasetResponse, EvaluationsCreateDatasetRowData, EvaluationsCreateDatasetRowResponse, EvaluationsUpdateDatasetRowData, EvaluationsUpdateDatasetRowResponse, EvaluationsDeleteDatasetRowData, EvaluationsDeleteDatasetRowResponse, EvaluationsEnqueueSavedDatasetRunData, EvaluationsEnqueueSavedDatasetRunResponse, EvaluationsReadEvaluationJobData, EvaluationsReadEvaluationJobResponse, EvaluationsReadAllEvaluationSchedulesData, EvaluationsReadAllEvaluationSchedulesResponse, EvaluationsCreateGlobalEvaluationScheduleData, EvaluationsCreateGlobalEvaluationScheduleResponse, EvaluationsUpdateGlobalEvaluationScheduleData, EvaluationsUpdateGlobalEvaluationScheduleResponse, EvaluationsDeleteGlobalEvaluationScheduleData, EvaluationsDeleteGlobalEvaluationScheduleResponse, EvaluationsReadEvaluationSchedulesData, EvaluationsReadEvaluationSchedulesResponse, EvaluationsCreateEvaluationScheduleData, EvaluationsCreateEvaluationScheduleResponse, EvaluationsUpdateEvaluationScheduleData, EvaluationsUpdateEvaluationScheduleResponse, EvaluationsDeleteEvaluationScheduleData, EvaluationsDeleteEvaluationScheduleResponse, EvaluationsReadSavedRunsData, EvaluationsReadSavedRunsResponse, EvaluationsReadSavedRunData, EvaluationsReadSavedRunResponse, EvaluationsDownloadSavedRunReportData, EvaluationsDownloadSavedRunReportResponse, EvaluationsReadScenariosData, EvaluationsReadScenariosResponse, EvaluationsCreateScenarioData, EvaluationsCreateScenarioResponse, EvaluationsImportScenarioData, EvaluationsImportScenarioResponse, EvaluationsReadScenarioData, EvaluationsReadScenarioResponse, EvaluationsUpdateScenarioData, EvaluationsUpdateScenarioResponse, EvaluationsDeleteScenarioData, EvaluationsDeleteScenarioResponse, EvaluationsExportMultiTurnDatasetData, EvaluationsExportMultiTurnDatasetResponse, EvaluationsRunScenarioData, EvaluationsRunScenarioResponse, EvaluationsReadScenarioRunsData, EvaluationsReadScenarioRunsResponse, EvaluationsReadScenarioRunData, EvaluationsReadScenarioRunResponse, EvaluationsRunEvaluationData, EvaluationsRunEvaluationResponse, ItemsReadItemsData, ItemsReadItemsResponse, ItemsCreateItemData, ItemsCreateItemResponse, ItemsReadItemData, ItemsReadItemResponse, ItemsUpdateItemData, ItemsUpdateItemResponse, ItemsDeleteItemData, ItemsDeleteItemResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, PrivateCreateUserData, PrivateCreateUserResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class EvaluationsService {
     /**
@@ -161,7 +161,6 @@ export class EvaluationsService {
     /**
      * Read Datasets
      * @param data The data for the request.
-     * @param data.evaluationType
      * @param data.offset
      * @param data.limit
      * @returns EvaluationDatasetsPublic Successful Response
@@ -170,9 +169,8 @@ export class EvaluationsService {
     public static readDatasets(data: EvaluationsReadDatasetsData = {}): CancelablePromise<EvaluationsReadDatasetsResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/datasets',
+            url: '/api/v1/evaluations/single-turn/datasets',
             query: {
-                evaluation_type: data.evaluationType,
                 offset: data.offset,
                 limit: data.limit
             },
@@ -192,9 +190,28 @@ export class EvaluationsService {
     public static createDataset(data: EvaluationsCreateDatasetData): CancelablePromise<EvaluationsCreateDatasetResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/datasets',
+            url: '/api/v1/evaluations/single-turn/datasets',
             body: data.requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Import Single Turn Dataset
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns EvaluationDatasetPublic Successful Response
+     * @throws ApiError
+     */
+    public static importSingleTurnDataset(data: EvaluationsImportSingleTurnDatasetData): CancelablePromise<EvaluationsImportSingleTurnDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/single-turn/datasets/import',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
             errors: {
                 422: 'Validation Error'
             }
@@ -212,7 +229,7 @@ export class EvaluationsService {
     public static importDatasetRows(data: EvaluationsImportDatasetRowsData): CancelablePromise<EvaluationsImportDatasetRowsResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/import',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/import',
             path: {
                 dataset_id: data.datasetId
             },
@@ -236,7 +253,7 @@ export class EvaluationsService {
     public static readDataset(data: EvaluationsReadDatasetData): CancelablePromise<EvaluationsReadDatasetResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/datasets/{dataset_id}',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}',
             path: {
                 dataset_id: data.datasetId
             },
@@ -261,7 +278,7 @@ export class EvaluationsService {
     public static updateDataset(data: EvaluationsUpdateDatasetData): CancelablePromise<EvaluationsUpdateDatasetResponse> {
         return __request(OpenAPI, {
             method: 'PUT',
-            url: '/api/v1/evaluations/datasets/{dataset_id}',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}',
             path: {
                 dataset_id: data.datasetId
             },
@@ -283,7 +300,27 @@ export class EvaluationsService {
     public static deleteDataset(data: EvaluationsDeleteDatasetData): CancelablePromise<EvaluationsDeleteDatasetResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
-            url: '/api/v1/evaluations/datasets/{dataset_id}',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}',
+            path: {
+                dataset_id: data.datasetId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Export Single Turn Dataset
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @returns SingleTurnDatasetDocument Successful Response
+     * @throws ApiError
+     */
+    public static exportSingleTurnDataset(data: EvaluationsExportSingleTurnDatasetData): CancelablePromise<EvaluationsExportSingleTurnDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/export',
             path: {
                 dataset_id: data.datasetId
             },
@@ -304,7 +341,7 @@ export class EvaluationsService {
     public static createDatasetRow(data: EvaluationsCreateDatasetRowData): CancelablePromise<EvaluationsCreateDatasetRowResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/rows',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/rows',
             path: {
                 dataset_id: data.datasetId
             },
@@ -328,7 +365,7 @@ export class EvaluationsService {
     public static updateDatasetRow(data: EvaluationsUpdateDatasetRowData): CancelablePromise<EvaluationsUpdateDatasetRowResponse> {
         return __request(OpenAPI, {
             method: 'PUT',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/rows/{row_id}',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/rows/{row_id}',
             path: {
                 dataset_id: data.datasetId,
                 row_id: data.rowId
@@ -352,7 +389,7 @@ export class EvaluationsService {
     public static deleteDatasetRow(data: EvaluationsDeleteDatasetRowData): CancelablePromise<EvaluationsDeleteDatasetRowResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/rows/{row_id}',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/rows/{row_id}',
             path: {
                 dataset_id: data.datasetId,
                 row_id: data.rowId
@@ -364,22 +401,222 @@ export class EvaluationsService {
     }
 
     /**
-     * Run Saved Dataset
+     * Enqueue Saved Dataset Run
      * @param data The data for the request.
      * @param data.datasetId
      * @param data.baselineRunId
-     * @returns SavedRun Successful Response
+     * @returns EvaluationJobPublic Successful Response
      * @throws ApiError
      */
-    public static runSavedDataset(data: EvaluationsRunSavedDatasetData): CancelablePromise<EvaluationsRunSavedDatasetResponse> {
+    public static enqueueSavedDatasetRun(data: EvaluationsEnqueueSavedDatasetRunData): CancelablePromise<EvaluationsEnqueueSavedDatasetRunResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/run',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/run',
             path: {
                 dataset_id: data.datasetId
             },
             query: {
                 baseline_run_id: data.baselineRunId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Evaluation Job
+     * @param data The data for the request.
+     * @param data.jobId
+     * @returns EvaluationJobPublic Successful Response
+     * @throws ApiError
+     */
+    public static readEvaluationJob(data: EvaluationsReadEvaluationJobData): CancelablePromise<EvaluationsReadEvaluationJobResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/jobs/{job_id}',
+            path: {
+                job_id: data.jobId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read All Evaluation Schedules
+     * @param data The data for the request.
+     * @param data.offset
+     * @param data.limit
+     * @returns EvaluationSchedulesPublic Successful Response
+     * @throws ApiError
+     */
+    public static readAllEvaluationSchedules(data: EvaluationsReadAllEvaluationSchedulesData = {}): CancelablePromise<EvaluationsReadAllEvaluationSchedulesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/schedules',
+            query: {
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Create Global Evaluation Schedule
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns EvaluationSchedulePublic Successful Response
+     * @throws ApiError
+     */
+    public static createGlobalEvaluationSchedule(data: EvaluationsCreateGlobalEvaluationScheduleData): CancelablePromise<EvaluationsCreateGlobalEvaluationScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/schedules',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Update Global Evaluation Schedule
+     * @param data The data for the request.
+     * @param data.scheduleId
+     * @param data.requestBody
+     * @returns EvaluationSchedulePublic Successful Response
+     * @throws ApiError
+     */
+    public static updateGlobalEvaluationSchedule(data: EvaluationsUpdateGlobalEvaluationScheduleData): CancelablePromise<EvaluationsUpdateGlobalEvaluationScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/schedules/{schedule_id}',
+            path: {
+                schedule_id: data.scheduleId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Delete Global Evaluation Schedule
+     * @param data The data for the request.
+     * @param data.scheduleId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteGlobalEvaluationSchedule(data: EvaluationsDeleteGlobalEvaluationScheduleData): CancelablePromise<EvaluationsDeleteGlobalEvaluationScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/evaluations/schedules/{schedule_id}',
+            path: {
+                schedule_id: data.scheduleId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Evaluation Schedules
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.offset
+     * @param data.limit
+     * @returns EvaluationSchedulesPublic Successful Response
+     * @throws ApiError
+     */
+    public static readEvaluationSchedules(data: EvaluationsReadEvaluationSchedulesData): CancelablePromise<EvaluationsReadEvaluationSchedulesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/schedules',
+            path: {
+                dataset_id: data.datasetId
+            },
+            query: {
+                offset: data.offset,
+                limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Create Evaluation Schedule
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.requestBody
+     * @returns EvaluationSchedulePublic Successful Response
+     * @throws ApiError
+     */
+    public static createEvaluationSchedule(data: EvaluationsCreateEvaluationScheduleData): CancelablePromise<EvaluationsCreateEvaluationScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/schedules',
+            path: {
+                dataset_id: data.datasetId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Update Evaluation Schedule
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.scheduleId
+     * @param data.requestBody
+     * @returns EvaluationSchedulePublic Successful Response
+     * @throws ApiError
+     */
+    public static updateEvaluationSchedule(data: EvaluationsUpdateEvaluationScheduleData): CancelablePromise<EvaluationsUpdateEvaluationScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/schedules/{schedule_id}',
+            path: {
+                dataset_id: data.datasetId,
+                schedule_id: data.scheduleId
+            },
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Delete Evaluation Schedule
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.scheduleId
+     * @returns Message Successful Response
+     * @throws ApiError
+     */
+    public static deleteEvaluationSchedule(data: EvaluationsDeleteEvaluationScheduleData): CancelablePromise<EvaluationsDeleteEvaluationScheduleResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/schedules/{schedule_id}',
+            path: {
+                dataset_id: data.datasetId,
+                schedule_id: data.scheduleId
             },
             errors: {
                 422: 'Validation Error'
@@ -399,7 +636,7 @@ export class EvaluationsService {
     public static readSavedRuns(data: EvaluationsReadSavedRunsData): CancelablePromise<EvaluationsReadSavedRunsResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/runs',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/runs',
             path: {
                 dataset_id: data.datasetId
             },
@@ -426,7 +663,7 @@ export class EvaluationsService {
     public static readSavedRun(data: EvaluationsReadSavedRunData): CancelablePromise<EvaluationsReadSavedRunResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/datasets/{dataset_id}/runs/{run_id}',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/runs/{run_id}',
             path: {
                 dataset_id: data.datasetId,
                 run_id: data.runId
@@ -434,6 +671,28 @@ export class EvaluationsService {
             query: {
                 offset: data.offset,
                 limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Download Saved Run Report
+     * @param data The data for the request.
+     * @param data.datasetId
+     * @param data.runId
+     * @returns string Successful Response
+     * @throws ApiError
+     */
+    public static downloadSavedRunReport(data: EvaluationsDownloadSavedRunReportData): CancelablePromise<EvaluationsDownloadSavedRunReportResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/single-turn/datasets/{dataset_id}/runs/{run_id}/report.html',
+            path: {
+                dataset_id: data.datasetId,
+                run_id: data.runId
             },
             errors: {
                 422: 'Validation Error'
@@ -452,7 +711,7 @@ export class EvaluationsService {
     public static readScenarios(data: EvaluationsReadScenariosData = {}): CancelablePromise<EvaluationsReadScenariosResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/scenarios',
+            url: '/api/v1/evaluations/multi-turn/datasets',
             query: {
                 offset: data.offset,
                 limit: data.limit
@@ -473,7 +732,7 @@ export class EvaluationsService {
     public static createScenario(data: EvaluationsCreateScenarioData): CancelablePromise<EvaluationsCreateScenarioResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/scenarios',
+            url: '/api/v1/evaluations/multi-turn/datasets',
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
@@ -492,7 +751,7 @@ export class EvaluationsService {
     public static importScenario(data: EvaluationsImportScenarioData): CancelablePromise<EvaluationsImportScenarioResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/scenarios/import',
+            url: '/api/v1/evaluations/multi-turn/datasets/import',
             formData: data.formData,
             mediaType: 'multipart/form-data',
             errors: {
@@ -511,7 +770,7 @@ export class EvaluationsService {
     public static readScenario(data: EvaluationsReadScenarioData): CancelablePromise<EvaluationsReadScenarioResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/scenarios/{scenario_id}',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}',
             path: {
                 scenario_id: data.scenarioId
             },
@@ -532,7 +791,7 @@ export class EvaluationsService {
     public static updateScenario(data: EvaluationsUpdateScenarioData): CancelablePromise<EvaluationsUpdateScenarioResponse> {
         return __request(OpenAPI, {
             method: 'PUT',
-            url: '/api/v1/evaluations/scenarios/{scenario_id}',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}',
             path: {
                 scenario_id: data.scenarioId
             },
@@ -554,7 +813,27 @@ export class EvaluationsService {
     public static deleteScenario(data: EvaluationsDeleteScenarioData): CancelablePromise<EvaluationsDeleteScenarioResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
-            url: '/api/v1/evaluations/scenarios/{scenario_id}',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}',
+            path: {
+                scenario_id: data.scenarioId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Export Multi Turn Dataset
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @returns MultiTurnDatasetDocument Successful Response
+     * @throws ApiError
+     */
+    public static exportMultiTurnDataset(data: EvaluationsExportMultiTurnDatasetData): CancelablePromise<EvaluationsExportMultiTurnDatasetResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}/export',
             path: {
                 scenario_id: data.scenarioId
             },
@@ -575,7 +854,7 @@ export class EvaluationsService {
     public static runScenario(data: EvaluationsRunScenarioData): CancelablePromise<EvaluationsRunScenarioResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/api/v1/evaluations/scenarios/{scenario_id}/run',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}/run',
             path: {
                 scenario_id: data.scenarioId
             },
@@ -592,19 +871,43 @@ export class EvaluationsService {
      * Read Scenario Runs
      * @param data The data for the request.
      * @param data.scenarioId
+     * @param data.offset
      * @param data.limit
-     * @returns ScenarioRunPublic Successful Response
+     * @returns ScenarioRunsPublic Successful Response
      * @throws ApiError
      */
     public static readScenarioRuns(data: EvaluationsReadScenarioRunsData): CancelablePromise<EvaluationsReadScenarioRunsResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/api/v1/evaluations/scenarios/{scenario_id}/runs',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}/runs',
             path: {
                 scenario_id: data.scenarioId
             },
             query: {
+                offset: data.offset,
                 limit: data.limit
+            },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+
+    /**
+     * Read Scenario Run
+     * @param data The data for the request.
+     * @param data.scenarioId
+     * @param data.runId
+     * @returns ScenarioRunPublic Successful Response
+     * @throws ApiError
+     */
+    public static readScenarioRun(data: EvaluationsReadScenarioRunData): CancelablePromise<EvaluationsReadScenarioRunResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/evaluations/multi-turn/datasets/{scenario_id}/runs/{run_id}',
+            path: {
+                scenario_id: data.scenarioId,
+                run_id: data.runId
             },
             errors: {
                 422: 'Validation Error'

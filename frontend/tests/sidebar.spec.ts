@@ -21,19 +21,28 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/utils/health-check/", (route) =>
     route.fulfill({ json: true }),
   )
-  await page.route("**/api/v1/evaluations/datasets**", (route) =>
+  await page.route("**/api/v1/evaluations/single-turn/datasets**", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
-  await page.route("**/api/v1/evaluations/scenarios**", (route) =>
+  await page.route("**/api/v1/evaluations/multi-turn/datasets**", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
   await page.route("**/api/v1/evaluations/endpoints", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
+  await page.route("**/api/v1/evaluations/metric-profiles", (route) =>
+    route.fulfill({ json: { data: [], count: 0 } }),
+  )
+  await page.route("**/api/v1/evaluations/metric-catalog", (route) =>
+    route.fulfill({ json: { data: [], count: 0 } }),
+  )
+  await page.route("**/api/v1/evaluations/schedules**", (route) =>
+    route.fulfill({ json: { data: [], count: 0 } }),
+  )
   await page.route("**/api/v1/items**", (route) =>
     route.fulfill({ json: { data: [], count: 0 } }),
   )
-  await page.route("**/api/v1/users", (route) =>
+  await page.route(/\/api\/v1\/users(?:\?.*)?$/, (route) =>
     route.fulfill({ json: { data: [], count: 0 } }),
   )
 })
@@ -53,6 +62,10 @@ test("sidebar uses English labels and simple page indicators", async ({
   await expect(
     sidebar.getByText("Regression Test", { exact: true }),
   ).toHaveCount(2)
+  await expect(sidebar.getByText("Scheduling", { exact: true })).toBeVisible()
+  await expect(
+    sidebar.getByText("Results & Reports", { exact: true }),
+  ).toBeVisible()
   await expect(sidebar.getByText("라이브 API 테스트")).toHaveCount(0)
   await expect(sidebar.getByText("회귀 평가")).toHaveCount(0)
   await expect(sidebar.locator('[data-sidebar="content"] svg')).toHaveCount(0)
@@ -69,11 +82,38 @@ test("sidebar uses English labels and simple page indicators", async ({
   expect(borderRadii.every((radius) => radius >= 4 && radius <= 8)).toBe(true)
 
   const contentButtons = sidebar.locator('[data-sidebar="content"] a')
-  await expect(contentButtons).toHaveCount(10)
+  await expect(contentButtons).toHaveCount(12)
   await expect(contentButtons.locator("svg")).toHaveCount(0)
   await expect(
     sidebar.locator('[data-sidebar="menu-button"][data-active="true"]'),
   ).toHaveAttribute("data-active", "true")
+})
+
+test("sidebar links to independent scheduling and result reports", async ({
+  page,
+}) => {
+  await page.goto("/evaluation-single-turn/live-test")
+
+  const sidebar = page.locator('[data-sidebar="sidebar"]')
+  const buttonFor = (label: string) =>
+    sidebar
+      .locator('[data-sidebar="menu-button"], [data-sidebar="menu-sub-button"]')
+      .filter({ hasText: label })
+      .first()
+
+  await sidebar.getByText("Scheduling", { exact: true }).click()
+  await expect(page).toHaveURL(/\/scheduling$/)
+  await expect(page.getByRole("heading", { name: "스케줄링" })).toBeVisible()
+  await expect(buttonFor("Scheduling")).toHaveAttribute("data-active", "true")
+
+  await sidebar.getByText("Results & Reports", { exact: true }).click()
+  await expect(page).toHaveURL(/\/evaluation-single-turn\/live-test#results$/)
+  await expect(page.locator("#results")).toBeInViewport()
+  await expect(buttonFor("Results & Reports")).toHaveAttribute(
+    "data-active",
+    "true",
+  )
+  await expect(buttonFor("Scheduling")).toHaveAttribute("data-active", "false")
 })
 
 test("sidebar orange state distinguishes active evaluation paths", async ({

@@ -26,7 +26,9 @@ ALGORITHM = "HS256"
 
 def evaluation_cipher() -> Fernet:
     """Build the app-bound cipher for request credentials stored in the DB."""
-    key = base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest())
+    key = base64.urlsafe_b64encode(
+        hashlib.sha256(settings.SECRET_KEY.encode()).digest()
+    )
     return Fernet(key)
 
 
@@ -39,8 +41,7 @@ def decrypt_evaluation_headers(value: str) -> dict[str, str]:
         return {}
     payload = json.loads(evaluation_cipher().decrypt(value.encode()))
     if not isinstance(payload, dict) or not all(
-        isinstance(key, str) and isinstance(item, str)
-        for key, item in payload.items()
+        isinstance(key, str) and isinstance(item, str) for key, item in payload.items()
     ):
         raise ValueError("Stored evaluation headers are invalid")
     return payload

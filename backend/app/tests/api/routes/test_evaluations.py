@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from deepeval.test_case import MultiTurnParams
@@ -18,6 +19,8 @@ from app.api.routes.evaluations import (
     _deepeval_conversation,
     _evaluate_live_row,
     _evaluate_row,
+    _extract_response,
+    _html_report,
     _import_rows,
     _openai_api_key,
     _overall_conversation_result,
@@ -34,8 +37,11 @@ from app.api.routes.evaluations import (
     settings,
 )
 from app.core.security import decrypt_evaluation_headers, encrypt_evaluation_headers
+from app.cron_schedule import CronExpressionError, next_cron_run
 from app.evaluation_metrics import METRIC_CATALOG, evaluate_selected_metrics
 from app.models import (
+    EvaluationDataset,
+    EvaluationDatasetCreate,
     EvaluationEndpoint,
     EvaluationEndpointCreate,
     EvaluationMetricDefinitionCreate,
@@ -47,7 +53,144 @@ from app.models import (
     EvaluationScenarioCreate,
     EvaluationScenarioRun,
     EvaluationScenarioRunTurn,
+    EvaluationScheduleCreate,
+    EvaluationScheduleTargetType,
+    EvaluationScheduleType,
+    MultiTurnDatasetDocument,
+    SingleTurnDatasetDocument,
+    User,
 )
+
+
+def test_single_and_multi_turn_dataset_contracts_are_independent() -> None:
+    single = EvaluationDatasetCreate(
+        name="싱글턴 데이터셋",
+        evaluator="local",
+        evaluation_type="single_turn",
+    )
+    assert single.evaluation_type == "single_turn"
+
+    with pytest.raises(ValueError, match="single_turn"):
+        EvaluationDatasetCreate(
+            name="잘못된 멀티턴 데이터셋",
+            evaluator="local",
+            evaluation_type="multi_turn",
+        )
+
+    paths = {
+        path
+        for route in evaluations.router.routes
+        if (path := getattr(route, "path", None)) is not None
+    }
+    assert "/evaluations/single-turn/datasets" in paths
+    assert "/evaluations/single-turn/datasets/{dataset_id}/run" in paths
+    assert "/evaluations/single-turn/datasets/{dataset_id}/export" in paths
+    assert "/evaluations/multi-turn/datasets" in paths
+    assert "/evaluations/multi-turn/datasets/{scenario_id}/run" in paths
+    assert "/evaluations/multi-turn/datasets/{scenario_id}/export" in paths
+
+
+def test_dataset_documents_require_matching_types_and_request_shapes() -> None:
+    endpoint_id = uuid.uuid4()
+    profile_id = uuid.uuid4()
+    single = SingleTurnDatasetDocument.model_validate(
+        {
+            "name": "싱글턴",
+            "test_type": "single_turn",
+            "endpoint_id": str(endpoint_id),
+            "metric_profile_id": str(profile_id),
+            "cases": [
+                {
+                    "input": "질문",
+                    "request": {
+                        "headers": {"Content-Type": "application/json"},
+                        "body": {"message": "질문"},
+                        "actual_output_json_pointer": "/data/answer",
+                    },
+                    "expected_output": "기대 답변",
+                }
+            ],
+        }
+    )
+    assert single.cases[0].request.body == {"message": "질문"}
+
+    with pytest.raises(ValueError, match="single_turn"):
+        SingleTurnDatasetDocument.model_validate(
+            {
+                **single.model_dump(mode="json"),
+                "test_type": "multi_turn",
+            }
+        )
+
+    multi = MultiTurnDatasetDocument.model_validate(
+        {
+            "name": "멀티턴",
+            "test_type": "multi_turn",
+            "endpoint_id": str(endpoint_id),
+            "evaluator": "local",
+            "cases": [
+                {
+                    "identifier": "turn_1",
+                    "request": {
+                        "url": "https://example.com/chat",
+                        "headers": {},
+                        "body": {"message": "첫 질문"},
+                        "actual_output_json_pointer": None,
+                    },
+                    "expected_output": "첫 답변",
+                }
+            ],
+        }
+    )
+    assert multi.test_type == "multi_turn"
+
+
+def test_actual_output_extraction_supports_json_pointer_and_full_payload() -> None:
+    payload = {"data": {"answers": [{"text/value": "동적 응답"}]}}
+
+    assert _extract_response(payload, "/data/answers/0/text~1value") == "동적 응답"
+    assert _extract_response(payload, None) == payload
+    assert _extract_response(payload, "data.answers.0.text/value") == "동적 응답"
+
+    with pytest.raises(ValueError, match="was not found"):
+        _extract_response(payload, "/data/missing")
+
+
+def test_schedule_configuration_supports_only_interval_or_cron() -> None:
+    target_id = uuid.uuid4()
+    interval = EvaluationScheduleCreate(
+        name="매시간",
+        target_type=EvaluationScheduleTargetType.SINGLE_TURN,
+        target_id=target_id,
+        schedule_type=EvaluationScheduleType.INTERVAL,
+        interval_seconds=3600,
+    )
+    cron = EvaluationScheduleCreate(
+        name="평일 오전",
+        target_type=EvaluationScheduleTargetType.MULTI_TURN,
+        target_id=target_id,
+        schedule_type=EvaluationScheduleType.CRON,
+        cron_expression="0 9 * * 1-5",
+        timezone="Asia/Seoul",
+    )
+
+    assert interval.cron_expression is None
+    assert cron.interval_seconds is None
+    assert next_cron_run(
+        cron.cron_expression or "",
+        datetime(2026, 8, 9, tzinfo=UTC),
+        cron.timezone,
+    ) == datetime(2026, 8, 10, 0, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="require cron_expression"):
+        EvaluationScheduleCreate(
+            name="잘못된 Cron",
+            target_type=EvaluationScheduleTargetType.SINGLE_TURN,
+            target_id=target_id,
+            schedule_type=EvaluationScheduleType.CRON,
+        )
+    with pytest.raises(CronExpressionError, match="five years"):
+        next_cron_run("0 0 31 2 *", datetime(2026, 1, 1, tzinfo=UTC), "UTC")
 
 
 def _dynamic_metrics() -> list[EvaluationMetricDefinitionCreate]:
@@ -61,6 +204,74 @@ def _dynamic_metrics() -> list[EvaluationMetricDefinitionCreate]:
             weight_percent=40,
         ),
     ]
+
+
+def test_html_report_uses_saved_metric_snapshot_and_escapes_evidence() -> None:
+    owner_id = uuid.uuid4()
+    dataset = EvaluationDataset(
+        id=uuid.uuid4(),
+        owner_id=owner_id,
+        name="품질 <script>alert(1)</script>",
+        description="관리자가 선택한 평가지표 결과",
+        body_template="{}",
+    )
+    executor = User(
+        id=owner_id,
+        email="operator@example.com",
+        full_name="실행자",
+        hashed_password="unused",
+    )
+    run = EvaluationRun(
+        dataset_id=dataset.id,
+        owner_id=owner_id,
+        evaluator="deepeval",
+        total=1,
+        passed=1,
+        failed=0,
+        pass_rate=1,
+        average_score=0.82,
+        metric_profile_version=3,
+    )
+    row = EvaluationRunRow(
+        run_id=run.id,
+        input="<img src=x onerror=alert(1)>",
+        expected_output="기대 응답",
+        actual_output="실제 응답",
+        score=0.82,
+        passed=True,
+        metrics=[
+            {
+                "name": "geval_correctness",
+                "display_name": "정확성",
+                "score": 0.82,
+                "weight_percent": 100,
+                "weighted_score": 0.82,
+                "reason": "필수 조건을 충족했습니다.",
+            }
+        ],
+    )
+
+    report = _html_report(
+        _saved_run(run, [row], dataset=dataset, executor=executor),
+        dataset,
+        executor,
+        {
+            "metrics": [
+                {
+                    "metric_type": "geval_correctness",
+                    "weight_percent": 100,
+                }
+            ]
+        },
+    )
+
+    assert "geval_correctness" in report
+    assert "100%" in report
+    assert "82.00점" in report
+    assert "필수 조건을 충족했습니다." in report
+    assert "<script>alert(1)</script>" not in report
+    assert "<img src=x onerror=alert(1)>" not in report
+    assert "&lt;img src=x onerror=alert(1)&gt;" in report
 
 
 def test_metric_profile_requires_catalog_types_and_exact_weights() -> None:
@@ -99,10 +310,10 @@ def test_selected_metrics_use_deepeval_and_server_weights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[EvaluationMetricType] = []
+    active_metrics = 0
+    max_active_metrics = 0
 
-    async def translate_reasons(
-        reasons: list[str], model_name: str
-    ) -> list[str]:
+    async def translate_reasons(reasons: list[str], model_name: str) -> list[str]:
         assert reasons == ["Official metric judgment", "Official metric judgment"]
         assert model_name == "judge-model"
         return ["공식 지표 판정입니다.", "공식 지표 판정입니다."]
@@ -114,7 +325,12 @@ def test_selected_metrics_use_deepeval_and_server_weights(
             self.reason = "Official metric judgment"
 
         async def a_measure(self, _test_case: object) -> float:
+            nonlocal active_metrics, max_active_metrics
+            active_metrics += 1
+            max_active_metrics = max(max_active_metrics, active_metrics)
             calls.append(self.metric_type)
+            await asyncio.sleep(0)
+            active_metrics -= 1
             return self.score
 
     monkeypatch.setattr(
@@ -139,6 +355,7 @@ def test_selected_metrics_use_deepeval_and_server_weights(
         EvaluationMetricType.GEVAL_CORRECTNESS,
         EvaluationMetricType.GEVAL_PROFESSIONALISM,
     ]
+    assert max_active_metrics == 1
     assert [result.name for result in results] == [
         "geval_correctness",
         "geval_professionalism",

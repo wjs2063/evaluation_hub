@@ -1,5 +1,8 @@
 # FastAPI Project - Development
 
+Frontend, FastAPI, worker, scheduler를 Docker 또는 `uv`/`npm`으로 실행하는
+전체 절차는 [통합 실행 및 배포 가이드](run_guide.md)를 참고하세요.
+
 ## Docker Compose
 
 The checked-in `.env` enables the `db`, `backend`, and `frontend` profiles for

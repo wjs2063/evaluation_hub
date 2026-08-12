@@ -1,6 +1,15 @@
 import { Link as RouterLink } from "@tanstack/react-router"
 import axios from "axios"
-import { Play, Plus, Save, Trash2, Upload } from "lucide-react"
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Play,
+  Plus,
+  Save,
+  Trash2,
+  Upload,
+} from "lucide-react"
 import { type ChangeEvent, useCallback, useEffect, useState } from "react"
 
 import { PageHeader } from "@/components/Common/PageHeader"
@@ -32,6 +41,10 @@ type Scenario = {
   evaluator: "deepeval" | "local"
   turn_count: number
   turns?: Turn[]
+  created_by_id: string | null
+  updated_by_id: string | null
+  created_at: string
+  updated_at: string
 }
 type Turn = {
   id?: string
@@ -73,7 +86,7 @@ type ScenarioRun = {
   geval_score: number | null
   geval_reason: string | null
   error: string | null
-  turns: {
+  turns?: {
     id: string
     identifier: string
     request_body: string
@@ -86,6 +99,8 @@ type ScenarioRun = {
     error: string | null
   }[]
 }
+
+const RUNS_PER_PAGE = 20
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
 api.interceptors.request.use((config) => {
@@ -105,7 +120,7 @@ const initialScenario = (endpointId = "", url = "") => ({
       url,
       headers: {},
       body_template: '{"message":"첫 질문"}',
-      response_path: "answer",
+      response_path: "/answer",
       expected_output: "기대하는 첫 응답",
     },
     {
@@ -113,7 +128,41 @@ const initialScenario = (endpointId = "", url = "") => ({
       url,
       headers: {},
       body_template: '{"message":"첫 답변의 내용을 유지하면서 이어서 답해줘"}',
-      response_path: "answer",
+      response_path: "/answer",
+      expected_output: "기대하는 후속 응답",
+    },
+  ],
+})
+
+const sampleDocument = (endpointId = "", url = "") => ({
+  name: "상담 맥락 유지 테스트",
+  description: "이전 답변의 정보를 후속 turn에서 유지하는지 평가합니다.",
+  test_type: "multi_turn",
+  endpoint_id: endpointId || "00000000-0000-0000-0000-000000000000",
+  threshold: 0.7,
+  evaluator: "deepeval",
+  cases: [
+    {
+      identifier: "first_answer",
+      request: {
+        url: url || "https://api.example.com/v1/respond",
+        headers: { "Content-Type": "application/json" },
+        body: { message: "첫 질문", history: [] },
+        actual_output_json_pointer: "/answer",
+      },
+      expected_output: "기대하는 첫 응답",
+    },
+    {
+      identifier: "follow_up",
+      request: {
+        url: url || "https://api.example.com/v1/respond",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          message: "첫 답변의 내용을 유지하면서 이어서 답해줘",
+          history: "{{conversation_history}}",
+        },
+        actual_output_json_pointer: null,
+      },
       expected_output: "기대하는 후속 응답",
     },
   ],
@@ -123,7 +172,7 @@ const newTurn = (url = ""): TurnDraft => ({
   url,
   headers_json: "{}",
   body_template: '{"message":""}',
-  response_path: "answer",
+  response_path: "/answer",
   expected_output: "",
 })
 
@@ -145,6 +194,8 @@ export function MultiTurnWorkspace() {
     JSON.stringify(initialScenario(), null, 2),
   )
   const [runs, setRuns] = useState<ScenarioRun[]>([])
+  const [runCount, setRunCount] = useState(0)
+  const [runPage, setRunPage] = useState(0)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const [endpointsLoaded, setEndpointsLoaded] = useState(false)
@@ -156,7 +207,7 @@ export function MultiTurnWorkspace() {
   const load = useCallback(async (initializeSource = false) => {
     const [endpointResult, scenarioResult] = await Promise.all([
       api.get<{ data: Endpoint[] }>("/api/v1/evaluations/endpoints"),
-      api.get<{ data: Scenario[] }>("/api/v1/evaluations/scenarios"),
+      api.get<{ data: Scenario[] }>("/api/v1/evaluations/multi-turn/datasets"),
     ])
     const activeEndpoints = endpointResult.data.data.filter(
       (endpoint) => endpoint.is_active,
@@ -175,9 +226,18 @@ export function MultiTurnWorkspace() {
     }
   }, [])
 
+  const loadRuns = useCallback(async (id: string, page = 0) => {
+    const { data } = await api.get<{ data: ScenarioRun[]; count: number }>(
+      `/api/v1/evaluations/multi-turn/datasets/${id}/runs`,
+      { params: { offset: page * RUNS_PER_PAGE, limit: RUNS_PER_PAGE } },
+    )
+    setRuns(data.data)
+    setRunCount(data.count)
+  }, [])
+
   const loadScenario = async (id: string) => {
     const { data } = await api.get<Scenario>(
-      `/api/v1/evaluations/scenarios/${id}`,
+      `/api/v1/evaluations/multi-turn/datasets/${id}`,
     )
     // Header values are intentionally not returned. Explicit empty objects keep
     // the JSON format editable without exposing stored credentials.
@@ -197,11 +257,31 @@ export function MultiTurnWorkspace() {
       ),
     )
     setSelectedId(id)
-    const runResult = await api.get<ScenarioRun[]>(
-      `/api/v1/evaluations/scenarios/${id}/runs`,
-    )
-    setRuns(runResult.data)
+    setRunPage(0)
+    await loadRuns(id, 0)
   }
+
+  const loadRunDetail = async (runId: string) => {
+    if (!selectedId) return
+    try {
+      const { data } = await api.get<ScenarioRun>(
+        `/api/v1/evaluations/multi-turn/datasets/${selectedId}/runs/${runId}`,
+      )
+      setRuns((current) =>
+        current.map((run) => (run.id === runId ? data : run)),
+      )
+    } catch {
+      setError("멀티턴 실행 상세 결과를 불러오지 못했습니다.")
+    }
+  }
+
+  useEffect(() => {
+    if (selectedId) {
+      loadRuns(selectedId, runPage).catch(() =>
+        setError("멀티턴 실행 이력을 불러오지 못했습니다."),
+      )
+    }
+  }, [loadRuns, runPage, selectedId])
 
   useEffect(() => {
     load(true).catch(() => setError("멀티턴 시나리오를 불러오지 못했습니다."))
@@ -269,10 +349,13 @@ export function MultiTurnWorkspace() {
       setBusy(true)
       const response = selectedId
         ? await api.put<Scenario>(
-            `/api/v1/evaluations/scenarios/${selectedId}`,
+            `/api/v1/evaluations/multi-turn/datasets/${selectedId}`,
             scenario,
           )
-        : await api.post<Scenario>("/api/v1/evaluations/scenarios", scenario)
+        : await api.post<Scenario>(
+            "/api/v1/evaluations/multi-turn/datasets",
+            scenario,
+          )
       await load()
       await loadScenario(response.data.id)
     } catch (requestError) {
@@ -371,7 +454,7 @@ export function MultiTurnWorkspace() {
       setDraftError("")
       setError("")
       const { data } = await api.post<Scenario>(
-        "/api/v1/evaluations/scenarios",
+        "/api/v1/evaluations/multi-turn/datasets",
         scenario,
       )
       setCreateOpen(false)
@@ -394,9 +477,13 @@ export function MultiTurnWorkspace() {
     try {
       setBusy(true)
       const { data } = await api.post<ScenarioRun>(
-        `/api/v1/evaluations/scenarios/${selectedId}/run`,
+        `/api/v1/evaluations/multi-turn/datasets/${selectedId}/run`,
       )
-      setRuns((current) => [data, ...current])
+      setRunPage(0)
+      await loadRuns(selectedId, 0)
+      setRuns((current) =>
+        current.map((item) => (item.id === data.id ? data : item)),
+      )
     } catch (requestError) {
       setError(
         axios.isAxiosError(requestError)
@@ -417,13 +504,49 @@ export function MultiTurnWorkspace() {
       const body = new FormData()
       body.append("file", file)
       const { data } = await api.post<Scenario>(
-        "/api/v1/evaluations/scenarios/import",
+        "/api/v1/evaluations/multi-turn/datasets/import",
         body,
       )
       await load()
       await loadScenario(data.id)
+    } catch (uploadError) {
+      const detail = axios.isAxiosError(uploadError)
+        ? uploadError.response?.data?.detail
+        : null
+      setError(detail ?? "멀티턴 테스트셋 JSON 형식을 확인해 주세요.")
+    }
+  }
+
+  const downloadSample = () => {
+    const endpoint = endpoints[0]
+    const sample = sampleDocument(endpoint?.id, endpoint?.base_url)
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(sample, null, 2)], {
+        type: "application/json",
+      }),
+    )
+    const link = document.createElement("a")
+    link.href = url
+    link.download = "multi-turn-dataset-sample.json"
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const downloadDataset = async () => {
+    if (!selectedId) return
+    try {
+      const { data } = await api.get<Blob>(
+        `/api/v1/evaluations/multi-turn/datasets/${selectedId}/export`,
+        { responseType: "blob" },
+      )
+      const url = URL.createObjectURL(data)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `multi-turn-dataset-${selectedId}.json`
+      link.click()
+      URL.revokeObjectURL(url)
     } catch {
-      setError("시나리오 JSON 업로드에 실패했습니다.")
+      setError("등록된 멀티턴 테스트셋 JSON을 다운로드하지 못했습니다.")
     }
   }
 
@@ -646,11 +769,11 @@ export function MultiTurnWorkspace() {
                         htmlFor={`turn-${index}-response-path`}
                         className="block space-y-1 text-sm"
                       >
-                        <span>응답 JSON 경로 (선택)</span>
+                        <span>Actual output JSON Pointer (선택)</span>
                         <Input
                           id={`turn-${index}-response-path`}
                           value={turn.response_path ?? ""}
-                          placeholder="data.answer"
+                          placeholder="/data/answer · 비우면 응답 전체"
                           onChange={(event) =>
                             updateDraftTurn(
                               index,
@@ -757,10 +880,28 @@ export function MultiTurnWorkspace() {
                   <code>{"{{conversation_history}}"}</code>는 이전
                   user/assistant 대화 배열, <code>{"{{previous_output}}"}</code>
                   은 직전 응답입니다. DeepEval은 턴별 정확성과 전체 대화 흐름을
-                  종합해 판정합니다.
+                  종합해 판정합니다. 업로드 파일은{" "}
+                  <code>test_type: "multi_turn"</code>과 각 case의 request
+                  headers/body, expected_output을 포함해야 합니다.
                 </p>
               </div>
               <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!hasEndpoints}
+                  onClick={downloadSample}
+                >
+                  <Download /> JSON 샘플
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!selectedId}
+                  onClick={downloadDataset}
+                >
+                  <Download /> 테스트셋 JSON
+                </Button>
                 <Button variant="outline" size="sm" disabled={!hasEndpoints}>
                   <label className="cursor-pointer">
                     <Upload /> JSON 업로드
@@ -811,7 +952,13 @@ export function MultiTurnWorkspace() {
                   key={run.id}
                   className="overflow-hidden rounded-md border"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b p-3 text-sm">
+                  <button
+                    type="button"
+                    className="flex w-full flex-wrap items-center justify-between gap-2 border-b p-3 text-left text-sm hover:bg-muted/40"
+                    onClick={() => {
+                      if (!run.turns) void loadRunDetail(run.id)
+                    }}
+                  >
                     <span>{new Date(run.created_at).toLocaleString()}</span>
                     <span className="flex flex-wrap gap-2">
                       <Badge
@@ -834,7 +981,12 @@ export function MultiTurnWorkspace() {
                         </Badge>
                       )}
                     </span>
-                  </div>
+                  </button>
+                  {!run.turns && (
+                    <p className="p-3 text-xs text-muted-foreground">
+                      클릭하여 턴별 요청·응답과 평가 사유를 확인하세요.
+                    </p>
+                  )}
                   {run.overall_reason && (
                     <p className="border-b bg-muted/30 p-3 text-sm">
                       {run.overall_reason}
@@ -845,7 +997,7 @@ export function MultiTurnWorkspace() {
                       {run.error}
                     </p>
                   )}
-                  {run.turns.map((turn) => (
+                  {run.turns?.map((turn) => (
                     <div
                       key={turn.id}
                       className="grid gap-3 border-b p-3 text-xs last:border-0 md:grid-cols-3"
@@ -890,6 +1042,34 @@ export function MultiTurnWorkspace() {
                   ))}
                 </article>
               ))}
+              {runCount > RUNS_PER_PAGE && (
+                <div className="flex items-center justify-between gap-3 pt-2 text-xs text-muted-foreground">
+                  <span>
+                    총 {runCount.toLocaleString()}건 · {runPage + 1}/
+                    {Math.ceil(runCount / RUNS_PER_PAGE)} 페이지
+                  </span>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={runPage === 0}
+                      onClick={() =>
+                        setRunPage((value) => Math.max(0, value - 1))
+                      }
+                    >
+                      <ChevronLeft /> 이전
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={(runPage + 1) * RUNS_PER_PAGE >= runCount}
+                      onClick={() => setRunPage((value) => value + 1)}
+                    >
+                      다음 <ChevronRight />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         </div>

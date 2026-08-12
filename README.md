@@ -25,6 +25,9 @@ evaluation_hub/
 
 ## 실행
 
+Docker 운영 배포와 `uv`/`npm` 로컬 실행, worker 및 scheduler 실행 방법은
+[Frontend · Backend 실행 및 배포 가이드](run_guide.md)에 정리되어 있습니다.
+
 Docker가 실행 중인 환경에서 저장소 루트에서 다음 명령을 사용합니다.
 
 ```bash

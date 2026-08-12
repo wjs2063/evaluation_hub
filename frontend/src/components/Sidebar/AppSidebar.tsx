@@ -28,6 +28,11 @@ const baseItems: Item[] = [
             path: "/evaluation-single-turn/live-test",
           },
           {
+            title: "Results & Reports",
+            path: "/evaluation-single-turn/live-test",
+            hash: "results",
+          },
+          {
             title: "Regression Test",
             path: "/evaluation-single-turn/regression",
           },
@@ -49,6 +54,7 @@ const baseItems: Item[] = [
       },
     ],
   },
+  { title: "Scheduling", path: "/scheduling", section: "Evaluate" },
   { title: "Items", path: "/items", section: "Manage" },
 ]
 

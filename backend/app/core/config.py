@@ -115,9 +115,36 @@ class Settings(BaseSettings):
     # Evaluation requests are deliberately kept conservative.  These values are
     # server-side limits; they are not accepted from a browser request.
     EVALUATION_REQUEST_TIMEOUT_SECONDS: float = 15
-    EVALUATION_MAX_CONCURRENT_RUNS: int = 2
+    EVALUATION_WORKER_CONCURRENCY: int = 4
+    EVALUATION_JOB_POLL_SECONDS: float = 1
+    EVALUATION_JOB_LEASE_SECONDS: int = 300
+    EVALUATION_JOB_HEARTBEAT_SECONDS: int = 30
+    EVALUATION_JOB_MAX_ATTEMPTS: int = 3
+    EVALUATION_SCHEDULER_POLL_SECONDS: float = 5
     DEEPEVAL_MODEL: str = "gpt-4.1-mini"
     OPENAI_API_KEY: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def _validate_evaluation_worker_settings(self) -> Self:
+        if not 1 <= self.EVALUATION_WORKER_CONCURRENCY <= 4:
+            raise ValueError("EVALUATION_WORKER_CONCURRENCY must be between 1 and 4")
+        if self.EVALUATION_JOB_POLL_SECONDS <= 0:
+            raise ValueError("EVALUATION_JOB_POLL_SECONDS must be positive")
+        if self.EVALUATION_JOB_LEASE_SECONDS < 30:
+            raise ValueError("EVALUATION_JOB_LEASE_SECONDS must be at least 30")
+        if (
+            not 1
+            <= self.EVALUATION_JOB_HEARTBEAT_SECONDS
+            < self.EVALUATION_JOB_LEASE_SECONDS
+        ):
+            raise ValueError(
+                "EVALUATION_JOB_HEARTBEAT_SECONDS must be positive and shorter than the lease"
+            )
+        if not 1 <= self.EVALUATION_JOB_MAX_ATTEMPTS <= 10:
+            raise ValueError("EVALUATION_JOB_MAX_ATTEMPTS must be between 1 and 10")
+        if self.EVALUATION_SCHEDULER_POLL_SECONDS <= 0:
+            raise ValueError("EVALUATION_SCHEDULER_POLL_SECONDS must be positive")
+        return self
 
     @computed_field  # type: ignore[prop-decorator]
     @property

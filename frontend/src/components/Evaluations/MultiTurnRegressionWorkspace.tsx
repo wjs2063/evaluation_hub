@@ -1,7 +1,7 @@
 import { Link as RouterLink } from "@tanstack/react-router"
 import axios from "axios"
-import { ChevronRight, History, Play } from "lucide-react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { ChevronLeft, ChevronRight, History, Play } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
 
 import { PageHeader } from "@/components/Common/PageHeader"
 import { Badge } from "@/components/ui/badge"
@@ -51,8 +51,10 @@ type ScenarioRun = {
   geval_score: number | null
   geval_reason: string | null
   error: string | null
-  turns: ScenarioRunTurn[]
+  turns?: ScenarioRunTurn[]
 }
+
+const RUNS_PER_PAGE = 20
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
 api.interceptors.request.use((config) => {
@@ -68,6 +70,8 @@ export function MultiTurnRegressionWorkspace() {
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [scenarioId, setScenarioId] = useState("")
   const [runs, setRuns] = useState<ScenarioRun[]>([])
+  const [runCount, setRunCount] = useState(0)
+  const [runPage, setRunPage] = useState(0)
   const [runId, setRunId] = useState("")
   const [baselineRunId, setBaselineRunId] = useState("")
   const [error, setError] = useState("")
@@ -75,22 +79,37 @@ export function MultiTurnRegressionWorkspace() {
   const [endpointsLoaded, setEndpointsLoaded] = useState(false)
   const hasEndpoints = endpoints.some((endpoint) => endpoint.is_active)
 
-  const selectedRun = useMemo(
-    () => runs.find((run) => run.id === runId) ?? null,
-    [runId, runs],
+  const [selectedRun, setSelectedRun] = useState<ScenarioRun | null>(null)
+
+  const loadRuns = useCallback(
+    async (id: string, page = 0, preferredRunId?: string) => {
+      const { data } = await api.get<{ data: ScenarioRun[]; count: number }>(
+        `/api/v1/evaluations/multi-turn/datasets/${id}/runs`,
+        { params: { offset: page * RUNS_PER_PAGE, limit: RUNS_PER_PAGE } },
+      )
+      setRuns(data.data)
+      setRunCount(data.count)
+      setRunId(preferredRunId ?? data.data[0]?.id ?? "")
+    },
+    [],
   )
 
-  const loadRuns = useCallback(async (id: string, preferredRunId?: string) => {
-    const { data } = await api.get<ScenarioRun[]>(
-      `/api/v1/evaluations/scenarios/${id}/runs`,
-    )
-    setRuns(data)
-    setRunId(preferredRunId ?? data[0]?.id ?? "")
-  }, [])
+  useEffect(() => {
+    if (!scenarioId || !runId) {
+      setSelectedRun(null)
+      return
+    }
+    api
+      .get<ScenarioRun>(
+        `/api/v1/evaluations/multi-turn/datasets/${scenarioId}/runs/${runId}`,
+      )
+      .then(({ data }) => setSelectedRun(data))
+      .catch(() => setError("실행 상세 결과를 불러오지 못했습니다."))
+  }, [scenarioId, runId])
 
   useEffect(() => {
     Promise.all([
-      api.get<{ data: Scenario[] }>("/api/v1/evaluations/scenarios"),
+      api.get<{ data: Scenario[] }>("/api/v1/evaluations/multi-turn/datasets"),
       api.get<{ data: Endpoint[] }>("/api/v1/evaluations/endpoints"),
     ])
       .then(([scenarioResult, endpointResult]) => {
@@ -107,6 +126,7 @@ export function MultiTurnRegressionWorkspace() {
   const changeScenario = (id: string) => {
     setScenarioId(id)
     setBaselineRunId("")
+    setRunPage(0)
     setRuns([])
     setRunId("")
     if (id) {
@@ -120,11 +140,12 @@ export function MultiTurnRegressionWorkspace() {
       setIsRunning(true)
       setError("")
       const { data } = await api.post<ScenarioRun>(
-        `/api/v1/evaluations/scenarios/${scenarioId}/run`,
+        `/api/v1/evaluations/multi-turn/datasets/${scenarioId}/run`,
         undefined,
         { params: { baseline_run_id: baselineRunId || undefined } },
       )
-      await loadRuns(scenarioId, data.id)
+      setRunPage(0)
+      await loadRuns(scenarioId, 0, data.id)
     } catch (requestError) {
       const detail = axios.isAxiosError(requestError)
         ? requestError.response?.data?.detail
@@ -298,7 +319,7 @@ export function MultiTurnRegressionWorkspace() {
             </p>
           )}
           <div className="divide-y">
-            {selectedRun.turns.map((turn) => (
+            {selectedRun.turns?.map((turn) => (
               <article
                 key={turn.id}
                 className={`grid gap-4 p-5 text-sm ${selectedRun.baseline_run_id ? "xl:grid-cols-4" : "xl:grid-cols-3"}`}
@@ -362,6 +383,40 @@ export function MultiTurnRegressionWorkspace() {
               </article>
             ))}
           </div>
+          {runCount > RUNS_PER_PAGE && (
+            <div className="flex items-center justify-between border-t p-4 text-xs text-muted-foreground">
+              <span>
+                총 {runCount.toLocaleString()}건 · {runPage + 1}/
+                {Math.ceil(runCount / RUNS_PER_PAGE)} 페이지
+              </span>
+              <div className="flex gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={runPage === 0}
+                  onClick={() => {
+                    const next = Math.max(0, runPage - 1)
+                    setRunPage(next)
+                    void loadRuns(scenarioId, next)
+                  }}
+                >
+                  <ChevronLeft /> 이전
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={(runPage + 1) * RUNS_PER_PAGE >= runCount}
+                  onClick={() => {
+                    const next = runPage + 1
+                    setRunPage(next)
+                    void loadRuns(scenarioId, next)
+                  }}
+                >
+                  다음 <ChevronRight />
+                </Button>
+              </div>
+            </div>
+          )}
         </section>
       )}
     </div>

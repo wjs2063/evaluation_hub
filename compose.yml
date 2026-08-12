@@ -52,6 +52,14 @@ services:
       - POSTGRES_USER
       - POSTGRES_PASSWORD
       - SENTRY_DSN
+      - OPENAI_API_KEY
+      - DEEPEVAL_MODEL
+      - EVALUATION_WORKER_CONCURRENCY
+      - EVALUATION_JOB_POLL_SECONDS
+      - EVALUATION_JOB_LEASE_SECONDS
+      - EVALUATION_JOB_HEARTBEAT_SECONDS
+      - EVALUATION_JOB_MAX_ATTEMPTS
+      - EVALUATION_SCHEDULER_POLL_SECONDS
 
   backend:
     profiles: [backend]
@@ -70,6 +78,36 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
+  worker:
+    profiles: [backend]
+    image: "${DOCKER_IMAGE_BACKEND:-backend}:${TAG:-latest}"
+    restart: always
+    command: python -m app.worker
+    depends_on:
+      prestart:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment: *backend-environment
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
+  scheduler:
+    profiles: [backend]
+    image: "${DOCKER_IMAGE_BACKEND:-backend}:${TAG:-latest}"
+    restart: always
+    command: python -m app.scheduler
+    depends_on:
+      prestart:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment: *backend-environment
     build:
       context: .
       dockerfile: backend/Dockerfile

@@ -1,4 +1,3 @@
-import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -126,9 +125,7 @@ def _korean_reason_prompt(reasons: list[str]) -> str:
     )
 
 
-def _validate_korean_reason_batch(
-    generated: object, expected_count: int
-) -> list[str]:
+def _validate_korean_reason_batch(generated: object, expected_count: int) -> list[str]:
     batch = (
         generated
         if isinstance(generated, KoreanReasonBatch)
@@ -142,9 +139,7 @@ def _validate_korean_reason_batch(
     return translated
 
 
-async def _generate_korean_reasons(
-    reasons: list[str], model_name: str
-) -> list[str]:
+async def _generate_korean_reasons(reasons: list[str], model_name: str) -> list[str]:
     from deepeval.models import GPTModel
 
     generated, _cost = await GPTModel(model=model_name).a_generate(
@@ -153,7 +148,9 @@ async def _generate_korean_reasons(
     return _validate_korean_reason_batch(generated, len(reasons))
 
 
-def ensure_korean_reason(reason: str | None, score: float, model_name: str) -> str | None:
+def ensure_korean_reason(
+    reason: str | None, score: float, model_name: str
+) -> str | None:
     if not _reason_needs_korean(reason):
         return reason
     from deepeval.models import GPTModel
@@ -282,10 +279,12 @@ async def evaluate_selected_metrics(
     instances = [
         _build_metric(definition.metric_type, model_name) for definition in metrics
     ]
-    outcomes = await asyncio.gather(
-        *(instance.a_measure(test_case) for instance in instances),
-        return_exceptions=True,
-    )
+    outcomes: list[object] = []
+    for instance in instances:
+        try:
+            outcomes.append(await instance.a_measure(test_case))
+        except Exception as exc:
+            outcomes.append(exc)
     results: list[MetricEvaluationResult] = []
     for definition, instance, outcome in zip(metrics, instances, outcomes, strict=True):
         catalog = catalog_definition(definition.metric_type)

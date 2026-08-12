@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import html
 import importlib.util
 import io
 import json
@@ -13,13 +14,18 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import delete, func
 from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import CurrentSuperuser, CurrentUser, SessionDep
 from app.core.config import settings
+from app.core.db import engine
 from app.core.security import decrypt_evaluation_headers, encrypt_evaluation_headers
+from app.cron_schedule import CronExpressionError, next_cron_run
+from app.evaluation_jobs import enqueue_dataset_job
 from app.evaluation_metrics import (
     METRIC_CATALOG,
     catalog_definition,
@@ -35,6 +41,7 @@ from app.models import (
     EvaluationDatasetRowCreate,
     EvaluationDatasetRowPublic,
     EvaluationDatasetRowUpdate,
+    EvaluationDatasetScheduleCreate,
     EvaluationDatasetsPublic,
     EvaluationDatasetUpdate,
     EvaluationEndpoint,
@@ -42,6 +49,8 @@ from app.models import (
     EvaluationEndpointPublic,
     EvaluationEndpointsPublic,
     EvaluationEndpointUpdate,
+    EvaluationJob,
+    EvaluationJobPublic,
     EvaluationMetricCatalogItem,
     EvaluationMetricCatalogPublic,
     EvaluationMetricDefinitionCreate,
@@ -52,6 +61,7 @@ from app.models import (
     EvaluationMetricProfilePublic,
     EvaluationMetricProfilesPublic,
     EvaluationMetricProfileUpdate,
+    EvaluationRequestDocument,
     EvaluationRun,
     EvaluationRunMetricResult,
     EvaluationRunRow,
@@ -65,7 +75,18 @@ from app.models import (
     EvaluationScenarioTurnCreate,
     EvaluationScenarioTurnPublic,
     EvaluationScenarioUpdate,
+    EvaluationSchedule,
+    EvaluationScheduleBase,
+    EvaluationScheduleCreate,
+    EvaluationSchedulePublic,
+    EvaluationSchedulesPublic,
+    EvaluationScheduleTargetType,
+    EvaluationScheduleType,
+    EvaluationScheduleUpdate,
     Message,
+    MultiTurnDatasetDocument,
+    SingleTurnDatasetDocument,
+    User,
     get_datetime_utc,
 )
 
@@ -76,7 +97,7 @@ MAX_PAGE_SIZE = 200
 MAX_EXECUTION_ROWS = 1_000
 MAX_RESPONSE_BYTES = 1_000_000
 Framework = Literal["local", "deepeval", "langfuse"]
-_run_semaphore = asyncio.Semaphore(settings.EVALUATION_MAX_CONCURRENT_RUNS)
+_run_semaphore = asyncio.Semaphore(settings.EVALUATION_WORKER_CONCURRENCY)
 TURN_SCORE_WEIGHT = 0.4
 CONVERSATION_SCORE_WEIGHT = 0.6
 
@@ -154,6 +175,9 @@ class SavedRunSummary(BaseModel):
     geval_available: bool
     metric_profile_id: uuid.UUID | None = None
     metric_profile_version: int | None = None
+    dataset_name: str | None = None
+    dataset_description: str | None = None
+    executor_name: str | None = None
     created_at: str
 
 
@@ -185,7 +209,7 @@ class ScenarioRunTurnPublic(BaseModel):
     score_delta: float | None = None
 
 
-class ScenarioRunPublic(BaseModel):
+class ScenarioRunSummary(BaseModel):
     id: uuid.UUID
     scenario_id: uuid.UUID
     baseline_run_id: uuid.UUID | None
@@ -204,7 +228,18 @@ class ScenarioRunPublic(BaseModel):
     geval_reason: str | None
     error: str | None
     created_at: str
+    scenario_name: str | None = None
+    scenario_description: str | None = None
+    executor_name: str | None = None
+
+
+class ScenarioRunPublic(ScenarioRunSummary):
     turns: list[ScenarioRunTurnPublic]
+
+
+class ScenarioRunsPublic(BaseModel):
+    data: list[ScenarioRunSummary]
+    count: int
 
 
 def _normalize(value: Any) -> str:
@@ -512,6 +547,18 @@ def _endpoint_public(endpoint: EvaluationEndpoint) -> EvaluationEndpointPublic:
     )
 
 
+def _reject_sensitive_dataset_headers(headers: dict[str, str]) -> None:
+    sensitive = {"authorization", "cookie", "set-cookie", "x-api-key", "api-key"}
+    if any(
+        key.lower() in sensitive or "token" in key.lower() or "secret" in key.lower()
+        for key in headers
+    ):
+        raise HTTPException(
+            422,
+            "Sensitive request headers must be configured on the managed A server",
+        )
+
+
 def _validate_external_url(value: str) -> str:
     parsed = urlsplit(value)
     if (
@@ -593,7 +640,7 @@ async def _dataset_or_404(
     session: SessionDep, user: CurrentUser, dataset_id: uuid.UUID
 ) -> EvaluationDataset:
     dataset = await session.get(EvaluationDataset, dataset_id)
-    if not dataset:
+    if not dataset or dataset.evaluation_type != "single_turn":
         raise HTTPException(404, "Evaluation dataset not found")
     if not user.is_superuser and dataset.owner_id != user.id:
         raise HTTPException(403, "Not enough permissions")
@@ -711,6 +758,7 @@ def _metric_profile_snapshot(
         "metrics": [
             {
                 "metric_type": item.key,
+                "display_name": item.display_name,
                 "weight_percent": item.weight_percent,
             }
             for item in items
@@ -725,6 +773,7 @@ def _dataset_public(
 ) -> EvaluationDatasetPublic:
     return EvaluationDatasetPublic(
         **dataset.model_dump(exclude={"endpoint_url", "headers", "method"}),
+        test_type="single_turn",
         row_count=len(rows) if row_count is None else row_count,
         rows=[EvaluationDatasetRowPublic.model_validate(row) for row in rows],
     )
@@ -763,7 +812,14 @@ def _extract_response(value: Any, path: str | None) -> Any:
     current = value
     if not path:
         return current
-    for segment in path.split("."):
+    if path.startswith("/"):
+        segments = [
+            token.replace("~1", "/").replace("~0", "~") for token in path.split("/")[1:]
+        ]
+    else:
+        # Compatibility for datasets saved before RFC 6901 pointers were exposed.
+        segments = path.split(".")
+    for segment in segments:
         if isinstance(current, dict) and segment in current:
             current = current[segment]
         elif (
@@ -773,7 +829,7 @@ def _extract_response(value: Any, path: str | None) -> Any:
         ):
             current = current[int(segment)]
         else:
-            raise ValueError(f"Response path '{path}' was not found")
+            raise ValueError(f"Actual-output JSON Pointer '{path}' was not found")
     return current
 
 
@@ -814,9 +870,17 @@ async def _call_endpoint(
     return response.status_code, response_body, actual, request_body
 
 
-def _run_summary(run: EvaluationRun) -> SavedRunSummary:
+def _run_summary(
+    run: EvaluationRun,
+    dataset: EvaluationDataset | None = None,
+    executor: User | None = None,
+) -> SavedRunSummary:
     return SavedRunSummary(
-        **run.model_dump(exclude={"created_at"}), created_at=run.created_at.isoformat()
+        **run.model_dump(exclude={"created_at"}),
+        dataset_name=dataset.name if dataset else None,
+        dataset_description=(dataset.description or "")[:20] if dataset else None,
+        executor_name=(executor.full_name or executor.email) if executor else None,
+        created_at=run.created_at.isoformat(),
     )
 
 
@@ -824,6 +888,8 @@ def _saved_run(
     run: EvaluationRun,
     rows: list[EvaluationRunRow],
     baseline_rows: list[EvaluationRunRow] | None = None,
+    dataset: EvaluationDataset | None = None,
+    executor: User | None = None,
 ) -> SavedRun:
     baseline_by_dataset = {row.dataset_row_id: row for row in baseline_rows or []}
     serialized: list[SavedRunRow] = []
@@ -850,8 +916,74 @@ def _saved_run(
             )
         )
     return SavedRun(
-        **_run_summary(run).model_dump(), rows=serialized, row_count=len(serialized)
+        **_run_summary(run, dataset, executor).model_dump(),
+        rows=serialized,
+        row_count=len(serialized),
     )
+
+
+def _html_report(
+    run: SavedRun,
+    dataset: EvaluationDataset,
+    executor: User,
+    metric_profile_snapshot: dict[str, object] | None,
+) -> str:
+    def escaped(value: object | None) -> str:
+        return html.escape("" if value is None else str(value), quote=True)
+
+    def score(value: float) -> str:
+        return f"{value * 100:.2f}점"
+
+    profile_metrics = []
+    profile_name = "-"
+    if isinstance(metric_profile_snapshot, dict):
+        profile_name = str(metric_profile_snapshot.get("name") or "-")
+        raw_metrics = metric_profile_snapshot.get("metrics")
+        if isinstance(raw_metrics, list):
+            profile_metrics = [item for item in raw_metrics if isinstance(item, dict)]
+    profile_rows = "".join(
+        "<tr>"
+        f"<td>{escaped(item.get('display_name') or item.get('metric_type') or item.get('key'))}</td>"
+        f"<td>{escaped(item.get('weight_percent'))}%</td>"
+        "</tr>"
+        for item in profile_metrics
+    )
+    evidence = []
+    for index, row in enumerate(run.rows, start=1):
+        metric_rows = "".join(
+            "<tr>"
+            f"<td>{escaped(metric.display_name or metric.name)}</td>"
+            f"<td>{f'{metric.weight_percent}%' if metric.weight_percent is not None else '-'}</td>"
+            f"<td>{score(metric.score)}</td>"
+            f"<td>{score(metric.weighted_score) if metric.weighted_score is not None else '-'}</td>"
+            f"<td>{escaped(metric.error or metric.reason or '판정 사유 없음')}</td>"
+            "</tr>"
+            for metric in row.metrics
+        )
+        evidence.append(
+            f"""
+            <section class="evidence">
+              <h3>#{index} · {"통과" if row.passed else "실패"} · {score(row.score)}</h3>
+              <dl><dt>Input</dt><dd>{escaped(row.input)}</dd>
+              <dt>Expected output</dt><dd>{escaped(row.expected_output)}</dd>
+              <dt>Actual output</dt><dd>{escaped(row.actual_output)}</dd></dl>
+              {f'<p class="error">실행 오류: {escaped(row.error)}</p>' if row.error else ""}
+              <table><thead><tr><th>평가지표</th><th>가중치</th><th>점수</th><th>기여점수</th><th>판정 사유</th></tr></thead>
+              <tbody>{metric_rows or '<tr><td colspan="5">지표별 결과가 없습니다.</td></tr>'}</tbody></table>
+            </section>
+            """
+        )
+    return f"""<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{escaped(dataset.name)} 평가 결과표</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#292524;margin:0;background:#fafaf9}}main{{max-width:1120px;margin:0 auto;padding:32px}}h1{{margin-bottom:6px}}h2{{margin-top:32px}}.muted{{color:#78716c}}.summary{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:24px 0}}.card,.evidence{{background:white;border:1px solid #e7e5e4;border-radius:10px;padding:16px}}.value{{font-size:20px;font-weight:700;margin-top:6px}}table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{border:1px solid #e7e5e4;padding:9px;text-align:left;vertical-align:top}}th{{background:#f5f5f4}}dl{{display:grid;grid-template-columns:150px 1fr;gap:8px}}dt{{font-weight:600}}dd{{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}}.evidence{{margin:14px 0}}.error{{color:#b91c1c}}@media(max-width:700px){{main{{padding:16px}}.summary{{grid-template-columns:1fr 1fr}}table{{display:block;overflow-x:auto}}dl{{grid-template-columns:1fr}}}}@media print{{body{{background:white}}.evidence{{break-inside:avoid}}}}
+</style></head><body><main>
+<header><p class="muted">EvaluationHub · 싱글턴 품질 테스트</p><h1>{escaped(dataset.name)}</h1><p>{escaped(dataset.description or "설명 없음")}</p></header>
+<div class="summary"><div class="card"><span class="muted">실행자</span><div class="value">{escaped(executor.full_name or executor.email)}</div></div><div class="card"><span class="muted">실행시각</span><div class="value">{escaped(run.created_at)}</div></div><div class="card"><span class="muted">종합 점수</span><div class="value">{score(run.average_score)}</div></div><div class="card"><span class="muted">통과</span><div class="value">{run.passed}/{run.total}</div></div></div>
+<h2>평가 프로파일</h2><p class="muted">{escaped(profile_name)} · 실행 스냅샷 v{escaped(run.metric_profile_version or "-")} · 기준 가중치 합계</p><table><thead><tr><th>평가지표</th><th>가중치</th></tr></thead><tbody>{profile_rows or '<tr><td colspan="2">지표 프로파일 스냅샷이 없습니다.</td></tr>'}</tbody></table>
+<h2>행별 결과</h2>{"".join(evidence)}
+</main></body></html>"""
 
 
 def _scenario_public(
@@ -861,6 +993,8 @@ def _scenario_public(
 ) -> EvaluationScenarioPublic:
     return EvaluationScenarioPublic(
         **scenario.model_dump(),
+        test_type="multi_turn",
+        evaluation_type="multi_turn",
         turn_count=len(turns) if count is None else count,
         turns=[
             EvaluationScenarioTurnPublic(
@@ -882,6 +1016,8 @@ def _scenario_run(
     run: EvaluationScenarioRun,
     turns: list[EvaluationScenarioRunTurn],
     baseline_turns: list[EvaluationScenarioRunTurn] | None = None,
+    scenario: EvaluationScenario | None = None,
+    executor: User | None = None,
 ) -> ScenarioRunPublic:
     baseline_by_identifier = {turn.identifier: turn for turn in baseline_turns or []}
     return ScenarioRunPublic(
@@ -889,6 +1025,9 @@ def _scenario_run(
         conversation_score=run.geval_score,
         conversation_reason=run.geval_reason,
         created_at=run.created_at.isoformat(),
+        scenario_name=scenario.name if scenario else None,
+        scenario_description=(scenario.description or "")[:20] if scenario else None,
+        executor_name=(executor.full_name or executor.email) if executor else None,
         turns=[
             ScenarioRunTurnPublic(
                 **turn.model_dump(),
@@ -901,6 +1040,22 @@ def _scenario_run(
             for turn in turns
             for baseline in [baseline_by_identifier.get(turn.identifier)]
         ],
+    )
+
+
+def _scenario_run_summary(
+    run: EvaluationScenarioRun,
+    scenario: EvaluationScenario,
+    executor: User | None,
+) -> ScenarioRunSummary:
+    return ScenarioRunSummary(
+        **run.model_dump(exclude={"created_at"}),
+        conversation_score=run.geval_score,
+        conversation_reason=run.geval_reason,
+        created_at=run.created_at.isoformat(),
+        scenario_name=scenario.name,
+        scenario_description=(scenario.description or "")[:20],
+        executor_name=(executor.full_name or executor.email) if executor else None,
     )
 
 
@@ -1163,27 +1318,28 @@ async def disable_endpoint(
     return Message(message="Evaluation endpoint disabled")
 
 
-@router.get("/datasets", response_model=EvaluationDatasetsPublic)
+@router.get("/single-turn/datasets", response_model=EvaluationDatasetsPublic)
+@router.get(
+    "/datasets", response_model=EvaluationDatasetsPublic, include_in_schema=False
+)
 async def read_datasets(
     session: SessionDep,
     user: CurrentUser,
-    evaluation_type: str | None = Query(default=None, max_length=32),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationDatasetsPublic:
-    statement = select(EvaluationDataset).order_by(
-        col(EvaluationDataset.updated_at).desc()
+    statement = (
+        select(EvaluationDataset)
+        .where(EvaluationDataset.evaluation_type == "single_turn")
+        .order_by(col(EvaluationDataset.updated_at).desc())
     )
-    count_statement = select(func.count(EvaluationDataset.id))
+    count_statement = select(func.count(EvaluationDataset.id)).where(
+        EvaluationDataset.evaluation_type == "single_turn"
+    )
     if not user.is_superuser:
         statement, count_statement = (
             statement.where(EvaluationDataset.owner_id == user.id),
             count_statement.where(EvaluationDataset.owner_id == user.id),
-        )
-    if evaluation_type:
-        statement, count_statement = (
-            statement.where(EvaluationDataset.evaluation_type == evaluation_type),
-            count_statement.where(EvaluationDataset.evaluation_type == evaluation_type),
         )
     datasets = list((await session.exec(statement.offset(offset).limit(limit))).all())
     counts = list(
@@ -1210,7 +1366,10 @@ async def read_datasets(
     )
 
 
-@router.post("/datasets", response_model=EvaluationDatasetPublic)
+@router.post("/single-turn/datasets", response_model=EvaluationDatasetPublic)
+@router.post(
+    "/datasets", response_model=EvaluationDatasetPublic, include_in_schema=False
+)
 async def create_dataset(
     dataset_in: EvaluationDatasetCreate, session: SessionDep, user: CurrentUser
 ) -> EvaluationDatasetPublic:
@@ -1220,16 +1379,14 @@ async def create_dataset(
         await _endpoint_or_422(session, dataset_in.endpoint_id)
     if dataset_in.metric_profile_id:
         await _metric_profile_or_422(session, dataset_in.metric_profile_id)
-    if dataset_in.headers:
-        raise HTTPException(
-            422, "Request headers must be configured on the managed A server"
-        )
+    _reject_sensitive_dataset_headers(dataset_in.headers)
     _validate_evaluator(dataset_in.evaluator)
     dataset = EvaluationDataset(
-        **dataset_in.model_dump(exclude={"rows", "headers"}),
+        **dataset_in.model_dump(exclude={"rows"}),
         method="POST",
-        headers={},
         owner_id=user.id,
+        created_by_id=user.id,
+        updated_by_id=user.id,
     )
     session.add(dataset)
     await session.flush()
@@ -1243,8 +1400,59 @@ async def create_dataset(
     return _dataset_public(dataset, rows)
 
 
+def _single_turn_document_create(
+    document: SingleTurnDatasetDocument,
+) -> EvaluationDatasetCreate:
+    for case in document.cases:
+        _reject_sensitive_dataset_headers(case.request.headers)
+    return EvaluationDatasetCreate(
+        name=document.name,
+        description=document.description,
+        evaluation_type="single_turn",
+        endpoint_id=document.endpoint_id,
+        metric_profile_id=document.metric_profile_id,
+        headers={},
+        body_template="{}",
+        response_path=None,
+        threshold=document.threshold,
+        evaluator=document.evaluator,
+        rows=[
+            EvaluationDatasetRowCreate(
+                input=case.input,
+                expected_output=case.expected_output,
+                request_headers=case.request.headers,
+                request_body=json.dumps(case.request.body, ensure_ascii=False),
+                response_path=case.request.actual_output_json_pointer,
+            )
+            for case in document.cases
+        ],
+    )
+
+
+@router.post("/single-turn/datasets/import", response_model=EvaluationDatasetPublic)
+async def import_single_turn_dataset(
+    file: UploadFile, session: SessionDep, user: CurrentUser
+) -> EvaluationDatasetPublic:
+    content = await file.read(MAX_SAVED_DATASET_BYTES + 1)
+    if len(content) > MAX_SAVED_DATASET_BYTES:
+        raise HTTPException(413, "Dataset cannot exceed 100 MB")
+    if not (file.filename or "").lower().endswith(".json"):
+        raise HTTPException(415, "Only .json datasets are supported")
+    try:
+        document = SingleTurnDatasetDocument.model_validate_json(content)
+    except ValueError as exc:
+        raise HTTPException(422, f"Invalid single-turn dataset JSON: {exc}")
+    return await create_dataset(_single_turn_document_create(document), session, user)
+
+
 @router.post(
-    "/datasets/{dataset_id}/import", response_model=EvaluationDatasetImportResult
+    "/single-turn/datasets/{dataset_id}/import",
+    response_model=EvaluationDatasetImportResult,
+)
+@router.post(
+    "/datasets/{dataset_id}/import",
+    response_model=EvaluationDatasetImportResult,
+    include_in_schema=False,
 )
 async def import_dataset_rows(
     dataset_id: uuid.UUID,
@@ -1264,6 +1472,7 @@ async def import_dataset_rows(
         ]
     )
     dataset.updated_at = get_datetime_utc()
+    dataset.updated_by_id = user.id
     session.add(dataset)
     await session.commit()
     return EvaluationDatasetImportResult(
@@ -1274,7 +1483,14 @@ async def import_dataset_rows(
     )
 
 
-@router.get("/datasets/{dataset_id}", response_model=EvaluationDatasetPublic)
+@router.get(
+    "/single-turn/datasets/{dataset_id}", response_model=EvaluationDatasetPublic
+)
+@router.get(
+    "/datasets/{dataset_id}",
+    response_model=EvaluationDatasetPublic,
+    include_in_schema=False,
+)
 async def read_dataset(
     dataset_id: uuid.UUID,
     session: SessionDep,
@@ -1303,7 +1519,72 @@ async def read_dataset(
     )
 
 
-@router.put("/datasets/{dataset_id}", response_model=EvaluationDatasetPublic)
+@router.get(
+    "/single-turn/datasets/{dataset_id}/export",
+    response_model=SingleTurnDatasetDocument,
+)
+async def export_single_turn_dataset(
+    dataset_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> Response:
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    rows = list(
+        (
+            await session.exec(
+                select(EvaluationDatasetRow)
+                .where(EvaluationDatasetRow.dataset_id == dataset.id)
+                .order_by(col(EvaluationDatasetRow.created_at))
+            )
+        ).all()
+    )
+    try:
+        body = json.loads(dataset.body_template)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(409, "Saved request body is not valid JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(409, "Saved request body must be a JSON object")
+    document = SingleTurnDatasetDocument(
+        name=dataset.name,
+        description=dataset.description,
+        test_type="single_turn",
+        endpoint_id=dataset.endpoint_id,
+        metric_profile_id=dataset.metric_profile_id,
+        threshold=dataset.threshold,
+        evaluator=cast(Literal["deepeval", "local"], dataset.evaluator),
+        cases=[
+            {
+                "input": row.input,
+                "request": EvaluationRequestDocument(
+                    headers=row.request_headers or dataset.headers,
+                    body=json.loads(row.request_body) if row.request_body else body,
+                    actual_output_json_pointer=(
+                        row.response_path if row.request_body else dataset.response_path
+                    ),
+                ),
+                "expected_output": row.expected_output,
+            }
+            for row in rows
+        ],
+    )
+    return Response(
+        content=document.model_dump_json(indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="single-turn-dataset-{dataset.id}.json"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.put(
+    "/single-turn/datasets/{dataset_id}", response_model=EvaluationDatasetPublic
+)
+@router.put(
+    "/datasets/{dataset_id}",
+    response_model=EvaluationDatasetPublic,
+    include_in_schema=False,
+)
 async def update_dataset(
     dataset_id: uuid.UUID,
     dataset_in: EvaluationDatasetUpdate,
@@ -1323,16 +1604,13 @@ async def update_dataset(
         await _endpoint_or_422(session, dataset_in.endpoint_id)
     if dataset_in.metric_profile_id:
         await _metric_profile_or_422(session, dataset_in.metric_profile_id)
-    if dataset_in.headers:
-        raise HTTPException(
-            422, "Request headers must be configured on the managed A server"
-        )
+    if dataset_in.headers is not None:
+        _reject_sensitive_dataset_headers(dataset_in.headers)
     if dataset_in.evaluator is not None:
         _validate_evaluator(dataset_in.evaluator)
-    dataset.sqlmodel_update(
-        dataset_in.model_dump(exclude_unset=True, exclude={"headers"})
-    )
+    dataset.sqlmodel_update(dataset_in.model_dump(exclude_unset=True))
     dataset.updated_at = get_datetime_utc()
+    dataset.updated_by_id = user.id
     session.add(dataset)
     await session.commit()
     await session.refresh(dataset)
@@ -1345,7 +1623,8 @@ async def update_dataset(
     )
 
 
-@router.delete("/datasets/{dataset_id}")
+@router.delete("/single-turn/datasets/{dataset_id}")
+@router.delete("/datasets/{dataset_id}", include_in_schema=False)
 async def delete_dataset(
     dataset_id: uuid.UUID, session: SessionDep, user: CurrentUser
 ) -> Message:
@@ -1355,23 +1634,41 @@ async def delete_dataset(
     return Message(message="Evaluation dataset deleted successfully")
 
 
-@router.post("/datasets/{dataset_id}/rows", response_model=EvaluationDatasetRowPublic)
+@router.post(
+    "/single-turn/datasets/{dataset_id}/rows",
+    response_model=EvaluationDatasetRowPublic,
+)
+@router.post(
+    "/datasets/{dataset_id}/rows",
+    response_model=EvaluationDatasetRowPublic,
+    include_in_schema=False,
+)
 async def create_dataset_row(
     dataset_id: uuid.UUID,
     row_in: EvaluationDatasetRowCreate,
     session: SessionDep,
     user: CurrentUser,
 ) -> EvaluationDatasetRow:
-    await _dataset_or_404(session, user, dataset_id)
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    _reject_sensitive_dataset_headers(row_in.request_headers or {})
     row = EvaluationDatasetRow(**row_in.model_dump(), dataset_id=dataset_id)
     session.add(row)
+    dataset.updated_at = get_datetime_utc()
+    dataset.updated_by_id = user.id
+    session.add(dataset)
     await session.commit()
     await session.refresh(row)
     return row
 
 
 @router.put(
-    "/datasets/{dataset_id}/rows/{row_id}", response_model=EvaluationDatasetRowPublic
+    "/single-turn/datasets/{dataset_id}/rows/{row_id}",
+    response_model=EvaluationDatasetRowPublic,
+)
+@router.put(
+    "/datasets/{dataset_id}/rows/{row_id}",
+    response_model=EvaluationDatasetRowPublic,
+    include_in_schema=False,
 )
 async def update_dataset_row(
     dataset_id: uuid.UUID,
@@ -1380,36 +1677,126 @@ async def update_dataset_row(
     session: SessionDep,
     user: CurrentUser,
 ) -> EvaluationDatasetRow:
-    await _dataset_or_404(session, user, dataset_id)
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    _reject_sensitive_dataset_headers(row_in.request_headers or {})
     row = await session.get(EvaluationDatasetRow, row_id)
     if not row or row.dataset_id != dataset_id:
         raise HTTPException(404, "Evaluation dataset row not found")
-    row.sqlmodel_update(row_in.model_dump())
+    row.sqlmodel_update(row_in.model_dump(exclude_unset=True))
     session.add(row)
+    dataset.updated_at = get_datetime_utc()
+    dataset.updated_by_id = user.id
+    session.add(dataset)
     await session.commit()
     await session.refresh(row)
     return row
 
 
-@router.delete("/datasets/{dataset_id}/rows/{row_id}")
+@router.delete("/single-turn/datasets/{dataset_id}/rows/{row_id}")
+@router.delete("/datasets/{dataset_id}/rows/{row_id}", include_in_schema=False)
 async def delete_dataset_row(
     dataset_id: uuid.UUID, row_id: uuid.UUID, session: SessionDep, user: CurrentUser
 ) -> Message:
-    await _dataset_or_404(session, user, dataset_id)
+    dataset = await _dataset_or_404(session, user, dataset_id)
     row = await session.get(EvaluationDatasetRow, row_id)
     if not row or row.dataset_id != dataset_id:
         raise HTTPException(404, "Evaluation dataset row not found")
     await session.delete(row)
+    dataset.updated_at = get_datetime_utc()
+    dataset.updated_by_id = user.id
+    session.add(dataset)
     await session.commit()
     return Message(message="Evaluation dataset row deleted successfully")
 
 
-@router.post("/datasets/{dataset_id}/run", response_model=SavedRun)
-async def run_saved_dataset(
+async def _validate_dataset_job_request(
+    dataset_id: uuid.UUID,
+    session: AsyncSession,
+    user: User,
+    baseline_run_id: uuid.UUID | None,
+) -> None:
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    _ensure_evaluator_ready(dataset.evaluator)
+    if dataset.evaluator == "deepeval":
+        if not dataset.metric_profile_id:
+            raise HTTPException(422, "DeepEval datasets require a metric profile")
+        await _metric_profile_or_422(session, dataset.metric_profile_id)
+    await _endpoint_or_422(session, dataset.endpoint_id)
+    row_count = await _count(
+        session, EvaluationDatasetRow, EvaluationDatasetRow.dataset_id == dataset_id
+    )
+    if not row_count:
+        raise HTTPException(
+            422, "Add at least one dataset row before running an evaluation"
+        )
+    if row_count > MAX_EXECUTION_ROWS:
+        raise HTTPException(422, f"A run can contain at most {MAX_EXECUTION_ROWS} rows")
+    if baseline_run_id:
+        baseline = await session.get(EvaluationRun, baseline_run_id)
+        if not baseline or baseline.dataset_id != dataset_id:
+            raise HTTPException(422, "Baseline run must belong to this dataset")
+
+
+async def _job_public(session: AsyncSession, job: EvaluationJob) -> EvaluationJobPublic:
+    run_id = (
+        await session.exec(
+            select(EvaluationRun.id).where(EvaluationRun.job_id == job.id)
+        )
+    ).first()
+    if not run_id:
+        run_id = (
+            await session.exec(
+                select(EvaluationScenarioRun.id).where(
+                    EvaluationScenarioRun.job_id == job.id
+                )
+            )
+        ).first()
+    return EvaluationJobPublic(**job.model_dump(), run_id=run_id)
+
+
+@router.post(
+    "/single-turn/datasets/{dataset_id}/run",
+    response_model=EvaluationJobPublic,
+    status_code=202,
+)
+@router.post(
+    "/datasets/{dataset_id}/run",
+    response_model=EvaluationJobPublic,
+    status_code=202,
+    include_in_schema=False,
+)
+async def enqueue_saved_dataset_run(
     dataset_id: uuid.UUID,
     session: SessionDep,
     user: CurrentUser,
     baseline_run_id: uuid.UUID | None = Query(default=None),
+) -> EvaluationJobPublic:
+    await _validate_dataset_job_request(dataset_id, session, user, baseline_run_id)
+    job = await enqueue_dataset_job(
+        session,
+        dataset_id=dataset_id,
+        owner_id=user.id,
+        baseline_run_id=baseline_run_id,
+    )
+    return await _job_public(session, job)
+
+
+@router.get("/jobs/{job_id}", response_model=EvaluationJobPublic)
+async def read_evaluation_job(
+    job_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> EvaluationJobPublic:
+    job = await session.get(EvaluationJob, job_id)
+    if not job or (not user.is_superuser and job.owner_id != user.id):
+        raise HTTPException(404, "Evaluation job not found")
+    return await _job_public(session, job)
+
+
+async def _execute_saved_dataset(
+    dataset_id: uuid.UUID,
+    session: AsyncSession,
+    user: User,
+    baseline_run_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> SavedRun:
     async with _run_semaphore:
         dataset = await _dataset_or_404(session, user, dataset_id)
@@ -1463,6 +1850,7 @@ async def run_saved_dataset(
             owner_id=user.id,
             baseline_run_id=baseline_run_id,
             evaluator=dataset.evaluator,
+            job_id=job_id,
             metric_profile_id=metric_profile.id if metric_profile else None,
             metric_profile_version=metric_profile.version if metric_profile else None,
             metric_profile_snapshot=_metric_profile_snapshot(
@@ -1478,16 +1866,19 @@ async def run_saved_dataset(
         try:
             # Dataset headers were a legacy plaintext field. Credentials now
             # live exclusively on the administrator-managed endpoint.
-            headers = decrypt_evaluation_headers(endpoint.encrypted_headers)
+            headers = {
+                **decrypt_evaluation_headers(endpoint.encrypted_headers),
+                **dataset.headers,
+            }
         except Exception as exc:
             raise HTTPException(500, "Unable to read the endpoint credentials") from exc
         for index, row in enumerate(rows):
             try:
                 status, response_body, actual, _ = await _call_endpoint(
                     endpoint.base_url,
-                    headers,
-                    dataset.body_template,
-                    dataset.response_path,
+                    {**headers, **(row.request_headers or {})},
+                    row.request_body or dataset.body_template,
+                    row.response_path if row.request_body else dataset.response_path,
                     {"input": row.input},
                 )
                 evaluation = await _evaluate_live_row(
@@ -1551,15 +1942,419 @@ async def run_saved_dataset(
         return _saved_run(run, saved, baseline_rows)
 
 
-@router.get("/datasets/{dataset_id}/runs", response_model=SavedRunsPublic)
+async def execute_saved_dataset_job(job: EvaluationJob) -> uuid.UUID:
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        existing_run_id = (
+            await session.exec(
+                select(EvaluationRun.id).where(EvaluationRun.job_id == job.id)
+            )
+        ).first()
+        if existing_run_id:
+            return existing_run_id
+        user = await session.get(User, job.owner_id)
+        if not user:
+            raise ValueError("Evaluation job owner no longer exists")
+        result = await _execute_saved_dataset(
+            job.dataset_id,
+            session,
+            user,
+            baseline_run_id=job.baseline_run_id,
+            job_id=job.id,
+        )
+        return result.id
+
+
+async def _schedule_or_404(
+    session: SessionDep, user: CurrentUser, schedule_id: uuid.UUID
+) -> EvaluationSchedule:
+    schedule = await session.get(EvaluationSchedule, schedule_id)
+    if not schedule:
+        raise HTTPException(404, "Evaluation schedule not found")
+    if not user.is_superuser and schedule.owner_id != user.id:
+        raise HTTPException(403, "Not enough permissions")
+    return schedule
+
+
+def _schedule_public(
+    schedule: EvaluationSchedule,
+    target: EvaluationDataset | EvaluationScenario,
+    owner: User | None,
+) -> EvaluationSchedulePublic:
+    target_type = (
+        EvaluationScheduleTargetType.SINGLE_TURN
+        if schedule.dataset_id
+        else EvaluationScheduleTargetType.MULTI_TURN
+    )
+    return EvaluationSchedulePublic(
+        **schedule.model_dump(exclude={"schedule_type"}),
+        schedule_type=EvaluationScheduleType(schedule.schedule_type),
+        target_type=target_type,
+        target_id=target.id,
+        target_name=target.name,
+        target_description=target.description,
+        owner_name=(owner.full_name or owner.email) if owner else None,
+    )
+
+
+async def _schedule_target(
+    session: SessionDep, schedule: EvaluationSchedule
+) -> EvaluationDataset | EvaluationScenario:
+    target = (
+        await session.get(EvaluationDataset, schedule.dataset_id)
+        if schedule.dataset_id
+        else await session.get(EvaluationScenario, schedule.scenario_id)
+    )
+    if not target:
+        raise HTTPException(404, "Evaluation schedule target not found")
+    return target
+
+
+async def _validate_scenario_job_request(
+    scenario_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    baseline_run_id: uuid.UUID | None = None,
+) -> EvaluationScenario:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    _ensure_evaluator_ready(scenario.evaluator)
+    await _endpoint_or_422(session, scenario.endpoint_id)
+    turn_count = await _count(
+        session,
+        EvaluationScenarioTurn,
+        EvaluationScenarioTurn.scenario_id == scenario_id,
+    )
+    if not turn_count:
+        raise HTTPException(422, "Add at least one turn before scheduling a scenario")
+    if baseline_run_id:
+        baseline = await session.get(EvaluationScenarioRun, baseline_run_id)
+        if not baseline or baseline.scenario_id != scenario_id:
+            raise HTTPException(422, "Baseline run must belong to this scenario")
+    return scenario
+
+
+def _next_schedule_run(
+    schedule_type: EvaluationScheduleType,
+    cron_expression: str | None,
+    timezone: str,
+    requested: Any = None,
+) -> Any:
+    if schedule_type == EvaluationScheduleType.CRON:
+        try:
+            return next_cron_run(cron_expression or "", get_datetime_utc(), timezone)
+        except CronExpressionError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    return requested or get_datetime_utc()
+
+
+@router.get("/schedules", response_model=EvaluationSchedulesPublic)
+async def read_all_evaluation_schedules(
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+) -> EvaluationSchedulesPublic:
+    statement = select(EvaluationSchedule).order_by(
+        col(EvaluationSchedule.created_at).desc()
+    )
+    count_statement = select(func.count(EvaluationSchedule.id))
+    if not user.is_superuser:
+        statement = statement.where(EvaluationSchedule.owner_id == user.id)
+        count_statement = count_statement.where(EvaluationSchedule.owner_id == user.id)
+    schedules = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    dataset_ids = {item.dataset_id for item in schedules if item.dataset_id}
+    scenario_ids = {item.scenario_id for item in schedules if item.scenario_id}
+    owner_ids = {item.owner_id for item in schedules}
+    datasets = {
+        item.id: item
+        for item in (
+            await session.exec(
+                select(EvaluationDataset).where(
+                    col(EvaluationDataset.id).in_(dataset_ids or {uuid.UUID(int=0)})
+                )
+            )
+        ).all()
+    }
+    scenarios = {
+        item.id: item
+        for item in (
+            await session.exec(
+                select(EvaluationScenario).where(
+                    col(EvaluationScenario.id).in_(scenario_ids or {uuid.UUID(int=0)})
+                )
+            )
+        ).all()
+    }
+    owners = {
+        item.id: item
+        for item in (
+            await session.exec(
+                select(User).where(col(User.id).in_(owner_ids or {uuid.UUID(int=0)}))
+            )
+        ).all()
+    }
+    return EvaluationSchedulesPublic(
+        data=[
+            _schedule_public(
+                schedule,
+                datasets[schedule.dataset_id]
+                if schedule.dataset_id
+                else scenarios[schedule.scenario_id],
+                owners.get(schedule.owner_id),
+            )
+            for schedule in schedules
+        ],
+        count=int((await session.exec(count_statement)).one()),
+    )
+
+
+@router.post("/schedules", response_model=EvaluationSchedulePublic, status_code=201)
+async def create_global_evaluation_schedule(
+    schedule_in: EvaluationScheduleCreate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationSchedulePublic:
+    if schedule_in.target_type == EvaluationScheduleTargetType.SINGLE_TURN:
+        await _validate_dataset_job_request(
+            schedule_in.target_id, session, user, schedule_in.baseline_run_id
+        )
+        target: EvaluationDataset | EvaluationScenario = await _dataset_or_404(
+            session, user, schedule_in.target_id
+        )
+        dataset_id, scenario_id = target.id, None
+    else:
+        if schedule_in.baseline_run_id:
+            raise HTTPException(
+                422, "Scheduled multi-turn runs do not support a baseline"
+            )
+        target = await _validate_scenario_job_request(
+            schedule_in.target_id, session, user
+        )
+        dataset_id, scenario_id = None, target.id
+    schedule = EvaluationSchedule(
+        **schedule_in.model_dump(exclude={"target_type", "target_id", "next_run_at"}),
+        dataset_id=dataset_id,
+        scenario_id=scenario_id,
+        owner_id=user.id,
+        next_run_at=_next_schedule_run(
+            schedule_in.schedule_type,
+            schedule_in.cron_expression,
+            schedule_in.timezone,
+            schedule_in.next_run_at,
+        ),
+    )
+    session.add(schedule)
+    await session.commit()
+    await session.refresh(schedule)
+    return _schedule_public(schedule, target, user)
+
+
+@router.put("/schedules/{schedule_id}", response_model=EvaluationSchedulePublic)
+async def update_global_evaluation_schedule(
+    schedule_id: uuid.UUID,
+    schedule_in: EvaluationScheduleUpdate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationSchedulePublic:
+    schedule = await _schedule_or_404(session, user, schedule_id)
+    updates = schedule_in.model_dump(exclude_unset=True)
+    configuration = EvaluationScheduleBase.model_validate(
+        {
+            "name": updates.get("name", schedule.name),
+            "schedule_type": updates.get("schedule_type", schedule.schedule_type),
+            "interval_seconds": updates.get(
+                "interval_seconds", schedule.interval_seconds
+            ),
+            "cron_expression": updates.get("cron_expression", schedule.cron_expression),
+            "timezone": updates.get("timezone", schedule.timezone),
+            "is_active": updates.get("is_active", schedule.is_active),
+        }
+    )
+    if "baseline_run_id" in updates and schedule.dataset_id:
+        await _validate_dataset_job_request(
+            schedule.dataset_id, session, user, updates["baseline_run_id"]
+        )
+    if schedule.scenario_id and updates.get("baseline_run_id"):
+        raise HTTPException(422, "Scheduled multi-turn runs do not support a baseline")
+    schedule.sqlmodel_update(configuration.model_dump())
+    if "baseline_run_id" in updates:
+        schedule.baseline_run_id = updates["baseline_run_id"]
+    if configuration.schedule_type == EvaluationScheduleType.CRON or any(
+        key in updates for key in {"schedule_type", "cron_expression", "timezone"}
+    ):
+        schedule.next_run_at = _next_schedule_run(
+            configuration.schedule_type,
+            configuration.cron_expression,
+            configuration.timezone,
+            updates.get("next_run_at", schedule.next_run_at),
+        )
+    elif "next_run_at" in updates and updates["next_run_at"] is not None:
+        schedule.next_run_at = updates["next_run_at"]
+    schedule.updated_at = get_datetime_utc()
+    session.add(schedule)
+    await session.commit()
+    await session.refresh(schedule)
+    return _schedule_public(
+        schedule,
+        await _schedule_target(session, schedule),
+        await session.get(User, schedule.owner_id),
+    )
+
+
+@router.delete("/schedules/{schedule_id}")
+async def delete_global_evaluation_schedule(
+    schedule_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> Message:
+    schedule = await _schedule_or_404(session, user, schedule_id)
+    await session.delete(schedule)
+    await session.commit()
+    return Message(message="Evaluation schedule deleted successfully")
+
+
+@router.get(
+    "/single-turn/datasets/{dataset_id}/schedules",
+    response_model=EvaluationSchedulesPublic,
+)
+@router.get(
+    "/datasets/{dataset_id}/schedules",
+    response_model=EvaluationSchedulesPublic,
+    include_in_schema=False,
+)
+async def read_evaluation_schedules(
+    dataset_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+) -> EvaluationSchedulesPublic:
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    statement = (
+        select(EvaluationSchedule)
+        .where(EvaluationSchedule.dataset_id == dataset_id)
+        .order_by(col(EvaluationSchedule.created_at).desc())
+    )
+    if not user.is_superuser:
+        statement = statement.where(EvaluationSchedule.owner_id == user.id)
+    schedules = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    owners = {
+        item.id: item
+        for item in (
+            await session.exec(
+                select(User).where(
+                    col(User.id).in_(
+                        {item.owner_id for item in schedules} or {uuid.UUID(int=0)}
+                    )
+                )
+            )
+        ).all()
+    }
+    return EvaluationSchedulesPublic(
+        data=[
+            _schedule_public(item, dataset, owners.get(item.owner_id))
+            for item in schedules
+        ],
+        count=await _count(
+            session,
+            EvaluationSchedule,
+            EvaluationSchedule.dataset_id == dataset_id,
+        ),
+    )
+
+
+@router.post(
+    "/single-turn/datasets/{dataset_id}/schedules",
+    response_model=EvaluationSchedulePublic,
+    status_code=201,
+)
+@router.post(
+    "/datasets/{dataset_id}/schedules",
+    response_model=EvaluationSchedulePublic,
+    status_code=201,
+    include_in_schema=False,
+)
+async def create_evaluation_schedule(
+    dataset_id: uuid.UUID,
+    schedule_in: EvaluationDatasetScheduleCreate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationSchedulePublic:
+    await _validate_dataset_job_request(
+        dataset_id, session, user, schedule_in.baseline_run_id
+    )
+    schedule = EvaluationSchedule(
+        **schedule_in.model_dump(exclude={"next_run_at"}),
+        dataset_id=dataset_id,
+        owner_id=user.id,
+        next_run_at=_next_schedule_run(
+            schedule_in.schedule_type,
+            schedule_in.cron_expression,
+            schedule_in.timezone,
+            schedule_in.next_run_at,
+        ),
+    )
+    session.add(schedule)
+    await session.commit()
+    await session.refresh(schedule)
+    return _schedule_public(
+        schedule, await _dataset_or_404(session, user, dataset_id), user
+    )
+
+
+@router.put(
+    "/single-turn/datasets/{dataset_id}/schedules/{schedule_id}",
+    response_model=EvaluationSchedulePublic,
+)
+@router.put(
+    "/datasets/{dataset_id}/schedules/{schedule_id}",
+    response_model=EvaluationSchedulePublic,
+    include_in_schema=False,
+)
+async def update_evaluation_schedule(
+    dataset_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    schedule_in: EvaluationScheduleUpdate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationSchedulePublic:
+    await _dataset_or_404(session, user, dataset_id)
+    schedule = await _schedule_or_404(session, user, schedule_id)
+    if schedule.dataset_id != dataset_id:
+        raise HTTPException(404, "Evaluation schedule not found")
+    return await update_global_evaluation_schedule(
+        schedule_id, schedule_in, session, user
+    )
+
+
+@router.delete("/single-turn/datasets/{dataset_id}/schedules/{schedule_id}")
+@router.delete(
+    "/datasets/{dataset_id}/schedules/{schedule_id}", include_in_schema=False
+)
+async def delete_evaluation_schedule(
+    dataset_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> Message:
+    await _dataset_or_404(session, user, dataset_id)
+    schedule = await _schedule_or_404(session, user, schedule_id)
+    if schedule.dataset_id != dataset_id:
+        raise HTTPException(404, "Evaluation schedule not found")
+    return await delete_global_evaluation_schedule(schedule_id, session, user)
+
+
+@router.get("/single-turn/datasets/{dataset_id}/runs", response_model=SavedRunsPublic)
+@router.get(
+    "/datasets/{dataset_id}/runs",
+    response_model=SavedRunsPublic,
+    include_in_schema=False,
+)
 async def read_saved_runs(
     dataset_id: uuid.UUID,
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
 ) -> SavedRunsPublic:
-    await _dataset_or_404(session, user, dataset_id)
+    dataset = await _dataset_or_404(session, user, dataset_id)
     runs = list(
         (
             await session.exec(
@@ -1571,15 +2366,28 @@ async def read_saved_runs(
             )
         ).all()
     )
+    executors = {
+        executor.id: executor
+        for executor in (
+            await session.exec(
+                select(User).where(col(User.id).in_({run.owner_id for run in runs}))
+            )
+        ).all()
+    }
     return SavedRunsPublic(
-        data=[_run_summary(run) for run in runs],
+        data=[_run_summary(run, dataset, executors.get(run.owner_id)) for run in runs],
         count=await _count(
             session, EvaluationRun, EvaluationRun.dataset_id == dataset_id
         ),
     )
 
 
-@router.get("/datasets/{dataset_id}/runs/{run_id}", response_model=SavedRun)
+@router.get("/single-turn/datasets/{dataset_id}/runs/{run_id}", response_model=SavedRun)
+@router.get(
+    "/datasets/{dataset_id}/runs/{run_id}",
+    response_model=SavedRun,
+    include_in_schema=False,
+)
 async def read_saved_run(
     dataset_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -1588,7 +2396,7 @@ async def read_saved_run(
     offset: int = Query(0, ge=0),
     limit: int = Query(MAX_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
 ) -> SavedRun:
-    await _dataset_or_404(session, user, dataset_id)
+    dataset = await _dataset_or_404(session, user, dataset_id)
     run = await session.get(EvaluationRun, run_id)
     if not run or run.dataset_id != dataset_id:
         raise HTTPException(404, "Evaluation run not found")
@@ -1614,11 +2422,63 @@ async def read_saved_run(
                 )
             ).all()
         )
-    result = _saved_run(run, rows, baseline_rows)
+    executor = await session.get(User, run.owner_id)
+    result = _saved_run(run, rows, baseline_rows, dataset, executor)
     result.row_count = await _count(
         session, EvaluationRunRow, EvaluationRunRow.run_id == run.id
     )
     return result
+
+
+@router.get(
+    "/single-turn/datasets/{dataset_id}/runs/{run_id}/report.html",
+    response_class=HTMLResponse,
+)
+@router.get(
+    "/datasets/{dataset_id}/runs/{run_id}/report.html",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def download_saved_run_report(
+    dataset_id: uuid.UUID,
+    run_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> HTMLResponse:
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    run = await session.get(EvaluationRun, run_id)
+    if not run or run.dataset_id != dataset_id:
+        raise HTTPException(404, "Evaluation run not found")
+    executor = await session.get(User, run.owner_id)
+    if not executor:
+        raise HTTPException(404, "Evaluation run executor not found")
+    rows = list(
+        (
+            await session.exec(
+                select(EvaluationRunRow)
+                .where(EvaluationRunRow.run_id == run.id)
+                .order_by(col(EvaluationRunRow.id))
+            )
+        ).all()
+    )
+    report = _html_report(
+        _saved_run(run, rows, dataset=dataset, executor=executor),
+        dataset,
+        executor,
+        run.metric_profile_snapshot,
+    )
+    return HTMLResponse(
+        content=report,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="evaluation-report-{run.id}.html"'
+            ),
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 def _scenario_turns(
@@ -1674,7 +2534,10 @@ def _reject_sensitive_turn_headers(
             )
 
 
-@router.get("/scenarios", response_model=EvaluationScenariosPublic)
+@router.get("/multi-turn/datasets", response_model=EvaluationScenariosPublic)
+@router.get(
+    "/scenarios", response_model=EvaluationScenariosPublic, include_in_schema=False
+)
 async def read_scenarios(
     session: SessionDep,
     user: CurrentUser,
@@ -1714,7 +2577,10 @@ async def read_scenarios(
     )
 
 
-@router.post("/scenarios", response_model=EvaluationScenarioPublic)
+@router.post("/multi-turn/datasets", response_model=EvaluationScenarioPublic)
+@router.post(
+    "/scenarios", response_model=EvaluationScenarioPublic, include_in_schema=False
+)
 async def create_scenario(
     scenario_in: EvaluationScenarioCreate, session: SessionDep, user: CurrentUser
 ) -> EvaluationScenarioPublic:
@@ -1722,9 +2588,11 @@ async def create_scenario(
     _validate_evaluator(scenario_in.evaluator)
     _reject_sensitive_turn_headers(scenario_in.turns, user)
     scenario = EvaluationScenario(
-        **scenario_in.model_dump(exclude={"turns", "endpoint_id"}),
+        **scenario_in.model_dump(exclude={"turns", "endpoint_id", "test_type"}),
         endpoint_id=endpoint.id,
         owner_id=user.id,
+        created_by_id=user.id,
+        updated_by_id=user.id,
     )
     session.add(scenario)
     await session.flush()
@@ -1735,7 +2603,35 @@ async def create_scenario(
     return _scenario_public(scenario, turns)
 
 
-@router.post("/scenarios/import", response_model=EvaluationScenarioPublic)
+def _multi_turn_document_create(
+    document: MultiTurnDatasetDocument,
+) -> EvaluationScenarioCreate:
+    return EvaluationScenarioCreate(
+        name=document.name,
+        description=document.description,
+        endpoint_id=document.endpoint_id,
+        threshold=document.threshold,
+        evaluator=document.evaluator,
+        turns=[
+            EvaluationScenarioTurnCreate(
+                identifier=case.identifier,
+                url=case.request.url,
+                headers=case.request.headers,
+                body_template=json.dumps(case.request.body, ensure_ascii=False),
+                response_path=case.request.actual_output_json_pointer,
+                expected_output=case.expected_output,
+            )
+            for case in document.cases
+        ],
+    )
+
+
+@router.post("/multi-turn/datasets/import", response_model=EvaluationScenarioPublic)
+@router.post(
+    "/scenarios/import",
+    response_model=EvaluationScenarioPublic,
+    include_in_schema=False,
+)
 async def import_scenario(
     file: UploadFile, session: SessionDep, user: CurrentUser
 ) -> EvaluationScenarioPublic:
@@ -1743,13 +2639,20 @@ async def import_scenario(
     if len(content) > MAX_DATASET_BYTES:
         raise HTTPException(413, "Scenario cannot exceed 5 MB")
     try:
-        scenario_in = EvaluationScenarioCreate.model_validate_json(content)
+        document = MultiTurnDatasetDocument.model_validate_json(content)
     except ValueError as exc:
-        raise HTTPException(422, f"Invalid scenario JSON: {exc}")
-    return await create_scenario(scenario_in, session, user)
+        raise HTTPException(422, f"Invalid multi-turn dataset JSON: {exc}")
+    return await create_scenario(_multi_turn_document_create(document), session, user)
 
 
-@router.get("/scenarios/{scenario_id}", response_model=EvaluationScenarioPublic)
+@router.get(
+    "/multi-turn/datasets/{scenario_id}", response_model=EvaluationScenarioPublic
+)
+@router.get(
+    "/scenarios/{scenario_id}",
+    response_model=EvaluationScenarioPublic,
+    include_in_schema=False,
+)
 async def read_scenario(
     scenario_id: uuid.UUID, session: SessionDep, user: CurrentUser
 ) -> EvaluationScenarioPublic:
@@ -1766,7 +2669,75 @@ async def read_scenario(
     return _scenario_public(scenario, turns)
 
 
-@router.put("/scenarios/{scenario_id}", response_model=EvaluationScenarioPublic)
+@router.get(
+    "/multi-turn/datasets/{scenario_id}/export",
+    response_model=MultiTurnDatasetDocument,
+)
+async def export_multi_turn_dataset(
+    scenario_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> Response:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    turns = list(
+        (
+            await session.exec(
+                select(EvaluationScenarioTurn)
+                .where(EvaluationScenarioTurn.scenario_id == scenario.id)
+                .order_by(col(EvaluationScenarioTurn.position))
+            )
+        ).all()
+    )
+    cases: list[dict[str, Any]] = []
+    for turn in turns:
+        try:
+            body = json.loads(turn.body_template)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                409, "Saved turn request body is not valid JSON"
+            ) from exc
+        if not isinstance(body, dict):
+            raise HTTPException(409, "Saved turn request body must be a JSON object")
+        cases.append(
+            {
+                "identifier": turn.identifier,
+                "request": {
+                    "url": turn.url,
+                    # Stored header values are intentionally never exported.
+                    "headers": {},
+                    "body": body,
+                    "actual_output_json_pointer": turn.response_path,
+                },
+                "expected_output": turn.expected_output,
+            }
+        )
+    document = MultiTurnDatasetDocument(
+        name=scenario.name,
+        description=scenario.description,
+        test_type="multi_turn",
+        endpoint_id=scenario.endpoint_id,
+        threshold=scenario.threshold,
+        evaluator=cast(Literal["deepeval", "local"], scenario.evaluator),
+        cases=cases,
+    )
+    return Response(
+        content=document.model_dump_json(indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="multi-turn-dataset-{scenario.id}.json"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.put(
+    "/multi-turn/datasets/{scenario_id}", response_model=EvaluationScenarioPublic
+)
+@router.put(
+    "/scenarios/{scenario_id}",
+    response_model=EvaluationScenarioPublic,
+    include_in_schema=False,
+)
 async def update_scenario(
     scenario_id: uuid.UUID,
     scenario_in: EvaluationScenarioUpdate,
@@ -1784,6 +2755,7 @@ async def update_scenario(
         scenario_in.model_dump(exclude_unset=True, exclude={"turns"})
     )
     scenario.updated_at = get_datetime_utc()
+    scenario.updated_by_id = user.id
     if scenario_in.turns is not None:
         existing = list(
             (
@@ -1819,7 +2791,8 @@ async def update_scenario(
     return _scenario_public(scenario, turns)
 
 
-@router.delete("/scenarios/{scenario_id}")
+@router.delete("/multi-turn/datasets/{scenario_id}")
+@router.delete("/scenarios/{scenario_id}", include_in_schema=False)
 async def delete_scenario(
     scenario_id: uuid.UUID, session: SessionDep, user: CurrentUser
 ) -> Message:
@@ -1829,12 +2802,29 @@ async def delete_scenario(
     return Message(message="Evaluation scenario deleted successfully")
 
 
-@router.post("/scenarios/{scenario_id}/run", response_model=ScenarioRunPublic)
+@router.post("/multi-turn/datasets/{scenario_id}/run", response_model=ScenarioRunPublic)
+@router.post(
+    "/scenarios/{scenario_id}/run",
+    response_model=ScenarioRunPublic,
+    include_in_schema=False,
+)
 async def run_scenario(
     scenario_id: uuid.UUID,
     session: SessionDep,
     user: CurrentUser,
     baseline_run_id: uuid.UUID | None = Query(default=None),
+) -> ScenarioRunPublic:
+    return await _execute_scenario(
+        scenario_id, session, user, baseline_run_id=baseline_run_id
+    )
+
+
+async def _execute_scenario(
+    scenario_id: uuid.UUID,
+    session: AsyncSession,
+    user: User,
+    baseline_run_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
 ) -> ScenarioRunPublic:
     async with _run_semaphore:
         scenario = await _scenario_or_404(session, user, scenario_id)
@@ -1870,6 +2860,7 @@ async def run_scenario(
             owner_id=user.id,
             baseline_run_id=baseline_run_id,
             evaluator=scenario.evaluator,
+            job_id=job_id,
         )
         session.add(run)
         await session.flush()
@@ -1974,48 +2965,130 @@ async def run_scenario(
         return _scenario_run(run, results, baseline_turns)
 
 
-@router.get("/scenarios/{scenario_id}/runs", response_model=list[ScenarioRunPublic])
+async def execute_saved_scenario_job(job: EvaluationJob) -> uuid.UUID:
+    if not job.scenario_id:
+        raise ValueError("Scenario evaluation job has no scenario target")
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        existing_run_id = (
+            await session.exec(
+                select(EvaluationScenarioRun.id).where(
+                    EvaluationScenarioRun.job_id == job.id
+                )
+            )
+        ).first()
+        if existing_run_id:
+            return existing_run_id
+        user = await session.get(User, job.owner_id)
+        if not user:
+            raise ValueError("Evaluation job owner no longer exists")
+        result = await _execute_scenario(
+            job.scenario_id,
+            session,
+            user,
+            baseline_run_id=None,
+            job_id=job.id,
+        )
+        return result.id
+
+
+@router.get(
+    "/multi-turn/datasets/{scenario_id}/runs", response_model=ScenarioRunsPublic
+)
+@router.get(
+    "/scenarios/{scenario_id}/runs",
+    response_model=ScenarioRunsPublic,
+    include_in_schema=False,
+)
 async def read_scenario_runs(
     scenario_id: uuid.UUID,
     session: SessionDep,
     user: CurrentUser,
-    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
-) -> list[ScenarioRunPublic]:
-    await _scenario_or_404(session, user, scenario_id)
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+) -> ScenarioRunsPublic:
+    scenario = await _scenario_or_404(session, user, scenario_id)
     runs = list(
         (
             await session.exec(
                 select(EvaluationScenarioRun)
                 .where(EvaluationScenarioRun.scenario_id == scenario_id)
                 .order_by(col(EvaluationScenarioRun.created_at).desc())
+                .offset(offset)
                 .limit(limit)
             )
         ).all()
     )
-    output: list[ScenarioRunPublic] = []
-    for run in runs:
-        turns = list(
+    executors = {
+        executor.id: executor
+        for executor in (
+            await session.exec(
+                select(User).where(
+                    col(User.id).in_(
+                        {run.owner_id for run in runs} or {uuid.UUID(int=0)}
+                    )
+                )
+            )
+        ).all()
+    }
+    return ScenarioRunsPublic(
+        data=[
+            _scenario_run_summary(run, scenario, executors.get(run.owner_id))
+            for run in runs
+        ],
+        count=await _count(
+            session,
+            EvaluationScenarioRun,
+            EvaluationScenarioRun.scenario_id == scenario_id,
+        ),
+    )
+
+
+@router.get(
+    "/multi-turn/datasets/{scenario_id}/runs/{run_id}",
+    response_model=ScenarioRunPublic,
+)
+@router.get(
+    "/scenarios/{scenario_id}/runs/{run_id}",
+    response_model=ScenarioRunPublic,
+    include_in_schema=False,
+)
+async def read_scenario_run(
+    scenario_id: uuid.UUID,
+    run_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> ScenarioRunPublic:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    run = await session.get(EvaluationScenarioRun, run_id)
+    if not run or run.scenario_id != scenario_id:
+        raise HTTPException(404, "Evaluation scenario run not found")
+    turns = list(
+        (
+            await session.exec(
+                select(EvaluationScenarioRunTurn)
+                .where(EvaluationScenarioRunTurn.run_id == run.id)
+                .order_by(col(EvaluationScenarioRunTurn.position))
+            )
+        ).all()
+    )
+    baseline_turns: list[EvaluationScenarioRunTurn] = []
+    if run.baseline_run_id:
+        baseline_turns = list(
             (
                 await session.exec(
-                    select(EvaluationScenarioRunTurn)
-                    .where(EvaluationScenarioRunTurn.run_id == run.id)
-                    .order_by(col(EvaluationScenarioRunTurn.position))
+                    select(EvaluationScenarioRunTurn).where(
+                        EvaluationScenarioRunTurn.run_id == run.baseline_run_id
+                    )
                 )
             ).all()
         )
-        baseline_turns: list[EvaluationScenarioRunTurn] = []
-        if run.baseline_run_id:
-            baseline_turns = list(
-                (
-                    await session.exec(
-                        select(EvaluationScenarioRunTurn).where(
-                            EvaluationScenarioRunTurn.run_id == run.baseline_run_id
-                        )
-                    )
-                ).all()
-            )
-        output.append(_scenario_run(run, turns, baseline_turns))
-    return output
+    return _scenario_run(
+        run,
+        turns,
+        baseline_turns,
+        scenario,
+        await session.get(User, run.owner_id),
+    )
 
 
 @router.post("/run", response_model=EvaluationSummary)
