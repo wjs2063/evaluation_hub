@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 
 type Props = { evaluationMode: "single_turn" | "multi_turn"; targetId: string }
-type Choice = { id: string; name: string }
+type Choice = { id: string; name: string; is_active?: boolean }
 type Comparison = {
   id: string
   status: string
@@ -42,15 +42,18 @@ export function ComparisonPanel({ evaluationMode, targetId }: Props) {
         params: { limit: 200 },
       }),
       api.get<{ data: Choice[] }>("/api/v1/evaluations/metric-profiles", {
-        params: { limit: 200, evaluation_mode: evaluationMode },
+        params: { limit: 200, evaluation_scope: evaluationMode },
       }),
     ])
       .then(([endpointResult, profileResult]) => {
         setEndpoints(endpointResult.data.data)
-        setProfiles(profileResult.data.data)
+        const activeProfiles = profileResult.data.data.filter(
+          (profile) => profile.is_active !== false,
+        )
+        setProfiles(activeProfiles)
         setEndpointA((value) => value || endpointResult.data.data[0]?.id || "")
         setEndpointB((value) => value || endpointResult.data.data[1]?.id || "")
-        setProfileId((value) => value || profileResult.data.data[0]?.id || "")
+        setProfileId((value) => value || activeProfiles[0]?.id || "")
       })
       .catch(() => setError("A/B 선택 항목을 불러오지 못했습니다."))
   }, [evaluationMode])

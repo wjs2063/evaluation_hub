@@ -22,6 +22,7 @@ export type Body_evaluations_run_evaluation = {
   file: string
   framework?: "local" | "deepeval" | "langfuse"
   threshold?: number
+  metric_profile_id?: string | null
 }
 
 export type framework = "local" | "deepeval" | "langfuse"
@@ -37,6 +38,55 @@ export type Body_login_login_access_token = {
 
 export type BulkDeleteRequest = {
   ids: Array<string>
+}
+
+export type CustomMetricCreate = {
+  name: string
+  description?: string | null
+  evaluation_scope: EvaluationScope
+  prompt: string
+  is_active?: boolean
+}
+
+export type CustomMetricPlaceholderContract = {
+  evaluation_scope: EvaluationScope
+  syntax?: "double_curly_lower_snake_case"
+  requires_at_least_one?: boolean
+  allowed_keys: Array<string>
+}
+
+export type CustomMetricPlaceholderContractsPublic = {
+  data: Array<CustomMetricPlaceholderContract>
+  count: number
+}
+
+export type CustomMetricPublic = {
+  name: string
+  description?: string | null
+  evaluation_scope: EvaluationScope
+  prompt: string
+  is_active?: boolean
+  id: string
+  version: number
+  required_keys: Array<string>
+  created_by_id: string | null
+  updated_by_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CustomMetricsPublic = {
+  data: Array<CustomMetricPublic>
+  count: number
+}
+
+export type CustomMetricUpdate = {
+  name: string
+  description?: string | null
+  evaluation_scope: EvaluationScope
+  prompt: string
+  is_active?: boolean
+  expected_version?: number | null
 }
 
 export type EvaluationComparisonCreate = {
@@ -260,21 +310,31 @@ export type EvaluationMetricCatalogPublic = {
 }
 
 export type EvaluationMetricDefinitionCreate = {
-  metric_type: EvaluationMetricType
+  metric_type?: EvaluationMetricType | null
+  custom_metric_id?: string | null
   weight_percent: number
   config?: {
     [key: string]: unknown
   }
   custom_instruction?: string | null
+  custom_metric_name?: string | null
+  custom_metric_version?: number | null
+  custom_metric_prompt?: string | null
+  required_keys?: Array<string>
 }
 
 export type EvaluationMetricDefinitionPublic = {
-  metric_type: EvaluationMetricType
+  metric_type?: EvaluationMetricType | null
+  custom_metric_id?: string | null
   weight_percent: number
   config?: {
     [key: string]: unknown
   }
   custom_instruction?: string | null
+  custom_metric_name?: string | null
+  custom_metric_version?: number | null
+  custom_metric_prompt?: string | null
+  required_keys?: Array<string>
   id: string
   position: number
   display_name: string
@@ -293,6 +353,7 @@ export type EvaluationMetricProfileCreate = {
   description?: string | null
   is_active?: boolean
   evaluation_mode?: EvaluationMode
+  evaluation_scope?: EvaluationScope
   metrics: Array<EvaluationMetricDefinitionCreate>
 }
 
@@ -301,6 +362,7 @@ export type EvaluationMetricProfilePublic = {
   description?: string | null
   is_active?: boolean
   evaluation_mode?: EvaluationMode
+  evaluation_scope?: EvaluationScope
   id: string
   version: number
   created_at: string
@@ -318,7 +380,9 @@ export type EvaluationMetricProfileUpdate = {
   description?: string | null
   is_active?: boolean
   evaluation_mode?: EvaluationMode
+  evaluation_scope?: EvaluationScope
   metrics: Array<EvaluationMetricDefinitionCreate>
+  expected_version?: number | null
 }
 
 export type EvaluationMetricType =
@@ -488,6 +552,8 @@ export type EvaluationScheduleUpdate = {
   next_run_at?: string | null
   baseline_run_id?: string | null
 }
+
+export type EvaluationScope = "quick_upload" | "single_turn" | "multi_turn"
 
 export type EvaluationSummary = {
   framework: "local" | "deepeval" | "langfuse"
@@ -818,8 +884,40 @@ export type ValidationError = {
 
 export type EvaluationsReadIntegrationsResponse = IntegrationsResponse
 
+export type EvaluationsReadCustomMetricPlaceholderContractsResponse =
+  CustomMetricPlaceholderContractsPublic
+
+export type EvaluationsReadCustomMetricsData = {
+  evaluationScope?: EvaluationScope | null
+  isActive?: boolean | null
+  limit?: number
+  offset?: number
+}
+
+export type EvaluationsReadCustomMetricsResponse = CustomMetricsPublic
+
+export type EvaluationsCreateCustomMetricData = {
+  requestBody: CustomMetricCreate
+}
+
+export type EvaluationsCreateCustomMetricResponse = CustomMetricPublic
+
+export type EvaluationsUpdateCustomMetricData = {
+  metricId: string
+  requestBody: CustomMetricUpdate
+}
+
+export type EvaluationsUpdateCustomMetricResponse = CustomMetricPublic
+
+export type EvaluationsDeleteCustomMetricData = {
+  metricId: string
+}
+
+export type EvaluationsDeleteCustomMetricResponse = Message
+
 export type EvaluationsReadMetricProfilesData = {
   evaluationMode?: EvaluationMode | null
+  evaluationScope?: EvaluationScope | null
   limit?: number
   offset?: number
 }

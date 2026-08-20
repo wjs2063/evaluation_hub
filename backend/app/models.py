@@ -4,7 +4,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import EmailStr, field_validator, model_validator
+from pydantic import EmailStr, ValidationInfo, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 from sqlalchemy import JSON, Column, DateTime, Numeric
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship, SQLModel
@@ -140,11 +141,30 @@ class EvaluationMode(StrEnum):
     MULTI_TURN = "multi_turn"
 
 
+class EvaluationScope(StrEnum):
+    QUICK_UPLOAD = "quick_upload"
+    SINGLE_TURN = "single_turn"
+    MULTI_TURN = "multi_turn"
+
+
 class EvaluationMetricDefinitionCreate(SQLModel):
-    metric_type: EvaluationMetricType
+    metric_type: EvaluationMetricType | None = None
+    custom_metric_id: uuid.UUID | None = None
     weight_percent: int = Field(ge=1, le=100)
     config: dict[str, Any] = Field(default_factory=dict)
     custom_instruction: str | None = Field(default=None, max_length=2000)
+    custom_metric_name: str | None = Field(default=None, max_length=255)
+    custom_metric_version: int | None = Field(default=None, ge=1)
+    custom_metric_prompt: str | None = Field(default=None, max_length=8000)
+    required_keys: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def exactly_one_metric_identity(self) -> EvaluationMetricDefinitionCreate:
+        if (self.metric_type is None) == (self.custom_metric_id is None):
+            raise ValueError(
+                "exactly one of metric_type or custom_metric_id must be provided"
+            )
+        return self
 
 
 class EvaluationMetricProfileBase(SQLModel):
@@ -152,14 +172,40 @@ class EvaluationMetricProfileBase(SQLModel):
     description: str | None = Field(default=None, max_length=500)
     is_active: bool = True
     evaluation_mode: EvaluationMode = EvaluationMode.SINGLE_TURN
+    evaluation_scope: EvaluationScope = EvaluationScope.SINGLE_TURN
 
 
 class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
     metrics: list[EvaluationMetricDefinitionCreate] = Field(min_length=1, max_length=16)
 
+    @model_validator(mode="before")
+    @classmethod
+    def synchronize_scope_and_legacy_mode(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        scope = data.get("evaluation_scope")
+        mode = data.get("evaluation_mode")
+        if scope is None and mode is not None:
+            data["evaluation_scope"] = mode
+        elif scope is not None and mode is None:
+            data["evaluation_mode"] = (
+                "multi_turn" if scope == "multi_turn" else "single_turn"
+            )
+        return data
+
     @model_validator(mode="after")
     def validate_metric_set(self) -> EvaluationMetricProfileCreate:
-        keys = [metric.metric_type for metric in self.metrics]
+        expected_mode = (
+            EvaluationMode.MULTI_TURN
+            if self.evaluation_scope == EvaluationScope.MULTI_TURN
+            else EvaluationMode.SINGLE_TURN
+        )
+        if self.evaluation_mode != expected_mode:
+            raise ValueError("evaluation_mode must match evaluation_scope")
+        keys = [
+            metric.metric_type or metric.custom_metric_id for metric in self.metrics
+        ]
         if len(keys) != len(set(keys)):
             raise ValueError("metric keys must be unique within a profile")
         if sum(metric.weight_percent for metric in self.metrics) != 100:
@@ -172,10 +218,13 @@ class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
         }
         expected = (
             multi_turn
-            if self.evaluation_mode == EvaluationMode.MULTI_TURN
+            if expected_mode == EvaluationMode.MULTI_TURN
             else set(EvaluationMetricType) - multi_turn
         )
-        if any(metric.metric_type not in expected for metric in self.metrics):
+        if any(
+            metric.metric_type is not None and metric.metric_type not in expected
+            for metric in self.metrics
+        ):
             raise ValueError(
                 "metric evaluation mode must match the profile evaluation mode"
             )
@@ -186,6 +235,8 @@ class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
             EvaluationMetricType.ROLE_ADHERENCE: ("chatbot_role",),
         }
         for metric in self.metrics:
+            if metric.metric_type is None:
+                continue
             for key in required_config.get(metric.metric_type, ()):
                 value = metric.config.get(key)
                 if value is None or value == "" or value == []:
@@ -196,7 +247,7 @@ class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
 
 
 class EvaluationMetricProfileUpdate(EvaluationMetricProfileCreate):
-    pass
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class EvaluationMetricProfile(EvaluationMetricProfileBase, table=True):
@@ -205,6 +256,19 @@ class EvaluationMetricProfile(EvaluationMetricProfileBase, table=True):
         sa_column=Column(
             SAEnum(
                 EvaluationMode,
+                values_callable=lambda enum_type: [item.value for item in enum_type],
+                native_enum=False,
+                create_constraint=False,
+                length=32,
+            ),
+            nullable=False,
+        ),
+    )
+    evaluation_scope: EvaluationScope = Field(
+        default=EvaluationScope.SINGLE_TURN,
+        sa_column=Column(
+            SAEnum(
+                EvaluationScope,
                 values_callable=lambda enum_type: [item.value for item in enum_type],
                 native_enum=False,
                 create_constraint=False,
@@ -238,6 +302,13 @@ class EvaluationMetricProfileItem(SQLModel, table=True):
     evaluation_params: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     custom_instruction: str | None = Field(default=None, max_length=2000)
+    custom_metric_id: uuid.UUID | None = Field(
+        default=None, foreign_key="custommetric.id", ondelete="RESTRICT"
+    )
+    custom_metric_version: int | None = Field(default=None, ge=1)
+    custom_metric_prompt: str | None = Field(default=None, max_length=8000)
+    custom_metric_scope: str | None = Field(default=None, max_length=32)
+    required_keys: list[str] = Field(default_factory=list, sa_column=Column(JSON))
 
 
 class EvaluationMetricDefinitionPublic(EvaluationMetricDefinitionCreate):
@@ -282,6 +353,113 @@ class EvaluationMetricProfilePublic(EvaluationMetricProfileBase):
 
 class EvaluationMetricProfilesPublic(SQLModel):
     data: list[EvaluationMetricProfilePublic]
+    count: int
+
+
+class CustomMetricBase(SQLModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+    evaluation_scope: EvaluationScope
+    prompt: str = Field(min_length=10, max_length=8000)
+    is_active: bool = True
+
+    @field_validator("prompt")
+    @classmethod
+    def validate_prompt_placeholders(cls, prompt: str, info: ValidationInfo) -> str:
+        from app.custom_metrics import (
+            CustomMetricPlaceholderError,
+            parse_custom_metric_prompt,
+        )
+
+        evaluation_scope = info.data.get("evaluation_scope")
+        if not isinstance(evaluation_scope, EvaluationScope):
+            return prompt
+        try:
+            parse_custom_metric_prompt(prompt, evaluation_scope.value)
+        except CustomMetricPlaceholderError as exc:
+            if exc.error_type == "custom_metric_placeholder_required":
+                raise PydanticCustomError(
+                    "custom_metric_placeholder_required",
+                    "프롬프트에 허용된 placeholder를 하나 이상 포함해야 합니다.",
+                    exc.context,
+                )
+            if exc.error_type == "custom_metric_placeholder_malformed":
+                raise PydanticCustomError(
+                    "custom_metric_placeholder_malformed",
+                    "placeholder 문법이 올바르지 않습니다: {invalid_tokens}",
+                    exc.context,
+                )
+            if exc.error_type == "custom_metric_placeholder_not_allowed":
+                raise PydanticCustomError(
+                    "custom_metric_placeholder_not_allowed",
+                    "{evaluation_scope} 범위에서 지원하지 않는 placeholder입니다: {invalid_tokens}",
+                    exc.context,
+                )
+            raise RuntimeError("Unknown custom metric placeholder error") from exc
+        return prompt
+
+
+class CustomMetricCreate(CustomMetricBase):
+    pass
+
+
+class CustomMetricUpdate(CustomMetricBase):
+    expected_version: int | None = Field(default=None, ge=1)
+
+
+class CustomMetric(CustomMetricBase, table=True):
+    evaluation_scope: EvaluationScope = Field(
+        sa_column=Column(
+            SAEnum(
+                EvaluationScope,
+                values_callable=lambda enum_type: [item.value for item in enum_type],
+                native_enum=False,
+                create_constraint=False,
+                length=32,
+            ),
+            nullable=False,
+        )
+    )
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    version: int = Field(default=1, ge=1)
+    created_by_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL"
+    )
+    updated_by_id: uuid.UUID | None = Field(
+        default=None, foreign_key="user.id", ondelete="SET NULL"
+    )
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
+    )
+    updated_at: datetime = Field(
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
+    )
+
+
+class CustomMetricPublic(CustomMetricBase):
+    id: uuid.UUID
+    version: int
+    required_keys: list[str]
+    created_by_id: uuid.UUID | None
+    updated_by_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CustomMetricsPublic(SQLModel):
+    data: list[CustomMetricPublic]
+    count: int
+
+
+class CustomMetricPlaceholderContract(SQLModel):
+    evaluation_scope: EvaluationScope
+    syntax: Literal["double_curly_lower_snake_case"] = "double_curly_lower_snake_case"
+    requires_at_least_one: bool = True
+    allowed_keys: list[str]
+
+
+class CustomMetricPlaceholderContractsPublic(SQLModel):
+    data: list[CustomMetricPlaceholderContract]
     count: int
 
 

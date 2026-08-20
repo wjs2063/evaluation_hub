@@ -1,0 +1,115 @@
+name: evaluation-hub-e2e
+
+x-backend-environment: &backend-environment
+  PROJECT_NAME: EvaluationHub E2E
+  ENVIRONMENT: local
+  FRONTEND_HOST: http://localhost:5173
+  BACKEND_CORS_ORIGINS: http://localhost:5173
+  SECRET_KEY: ${E2E_SECRET_KEY:-e2e-only-secret-key-not-for-production}
+  FIRST_SUPERUSER: e2e-admin@example.com
+  FIRST_SUPERUSER_PASSWORD: ${E2E_FIRST_SUPERUSER_PASSWORD:-e2e-only-admin-password}
+  SMTP_HOST: mailcatcher
+  SMTP_PORT: "1025"
+  SMTP_TLS: "false"
+  SMTP_SSL: "false"
+  EMAILS_FROM_EMAIL: noreply@example.com
+  POSTGRES_SERVER: db
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: evaluation_hub_e2e
+  POSTGRES_USER: evaluation_hub_e2e
+  POSTGRES_PASSWORD: ${E2E_POSTGRES_PASSWORD:-e2e-only-database-password}
+
+services:
+  db:
+    image: postgis/postgis:18-3.6
+    platform: linux/amd64
+    restart: "no"
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_DB: evaluation_hub_e2e
+      POSTGRES_USER: evaluation_hub_e2e
+      POSTGRES_PASSWORD: ${E2E_POSTGRES_PASSWORD:-e2e-only-database-password}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U evaluation_hub_e2e -d evaluation_hub_e2e
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    volumes:
+      - e2e-db-data:/var/lib/postgresql/data/pgdata
+
+  prestart:
+    image: evaluation-hub-e2e-backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: bash scripts/prestart.sh
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *backend-environment
+
+  backend:
+    image: evaluation-hub-e2e-backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command:
+      - fastapi
+      - run
+      - --workers
+      - "1"
+      - app/main.py
+    restart: "no"
+    depends_on:
+      prestart:
+        condition: service_completed_successfully
+    environment: *backend-environment
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8000/api/v1/utils/health-check/
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  mailcatcher:
+    image: schickling/mailcatcher
+    restart: "no"
+
+  playwright:
+    image: evaluation-hub-e2e-playwright
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.playwright
+      args:
+        VITE_API_URL: http://backend:8000
+        VITE_APP_ENV: local
+    ipc: host
+    depends_on:
+      backend:
+        condition: service_healthy
+      mailcatcher:
+        condition: service_started
+    environment:
+      VITE_API_URL: http://backend:8000
+      VITE_APP_ENV: local
+      MAILCATCHER_HOST: http://mailcatcher:1080
+      FIRST_SUPERUSER: e2e-admin@example.com
+      FIRST_SUPERUSER_PASSWORD: ${E2E_FIRST_SUPERUSER_PASSWORD:-e2e-only-admin-password}
+      PLAYWRIGHT_HTML_HOST: 0.0.0.0
+      PLAYWRIGHT_TRACE: retain-on-failure
+      CI: ${CI:-}
+    volumes:
+      - ./frontend/blob-report:/app/frontend/blob-report
+      - ./frontend/playwright-report:/app/frontend/playwright-report
+      - ./frontend/test-results:/app/frontend/test-results
+
+volumes:
+  e2e-db-data:

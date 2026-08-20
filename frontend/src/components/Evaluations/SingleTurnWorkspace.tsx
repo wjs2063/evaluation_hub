@@ -238,7 +238,8 @@ export function SingleTurnWorkspace({
     setProfileLoadError("")
     try {
       const response = await EvaluationsService.readMetricProfiles({
-        evaluationMode: "single_turn",
+        evaluationScope: "single_turn",
+        limit: 200,
       })
       setMetricProfiles(
         response.data.filter((profile) => profile.is_active !== false),

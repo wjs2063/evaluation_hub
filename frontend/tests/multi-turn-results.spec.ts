@@ -33,13 +33,13 @@ const run = {
   total: 1,
   passed: 1,
   failed: 0,
-  turn_average_score: 0.9,
+  turn_average_score: 90,
   conversation_score: null,
   conversation_reason: null,
-  overall_score: 0.9,
+  overall_score: 90,
   overall_passed: true,
   overall_reason: "전체 대화가 기대 조건을 충족했습니다.",
-  average_score: 0.9,
+  average_score: 90,
   evaluator: "local",
   geval_score: null,
   geval_reason: null,
@@ -106,7 +106,7 @@ test.beforeEach(async ({ page }) => {
               actual_output: "실제 멀티턴 응답",
               expected_output: "기대 응답",
               response_status: 200,
-              score: 0.9,
+              score: 90,
               passed: true,
               reason: "요청 의도에 맞게 답변했습니다.",
               error: null,
@@ -132,13 +132,15 @@ test("multi-turn results paginate and open a separate detail payload", async ({
   await page.goto("/evaluation-multi-turn/live-test")
   await page.getByRole("button", { name: /상담 대화 품질/ }).click()
 
-  await expect(page.getByText("총 21건 · 1/2 페이지")).toBeVisible()
+  await expect(page.getByText("총 21건 · 1/3 페이지")).toBeVisible()
   await page.getByRole("button", { name: /최종 통과/ }).click()
   await expect(page.getByText("실제 멀티턴 응답")).toBeVisible()
   await expect(page.getByText("요청 의도에 맞게 답변했습니다.")).toBeVisible()
 
   await page.getByRole("button", { name: "다음" }).click()
-  await expect(page.getByText("총 21건 · 2/2 페이지")).toBeVisible()
+  await expect(page.getByText("총 21건 · 2/3 페이지")).toBeVisible()
+  await page.getByRole("button", { name: "다음" }).click()
+  await expect(page.getByText("총 21건 · 3/3 페이지")).toBeVisible()
 })
 
 test("multi-turn page downloads the JSON sample", async ({ page }) => {

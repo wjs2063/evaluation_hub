@@ -283,6 +283,9 @@ async def test_schedule_list_and_crud_respect_owner_and_admin(
         remaining = await db.get(EvaluationSchedule, owner_schedule.id)
         if remaining:
             await db.delete(remaining)
+            # Flush the explicit child deletion before deleting its dataset;
+            # otherwise PostgreSQL's ON DELETE CASCADE removes the same row first.
+            await db.flush()
         for dataset in (owner_dataset, other_dataset):
             remaining_dataset = await db.get(EvaluationDataset, dataset.id)
             if remaining_dataset:

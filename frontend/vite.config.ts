@@ -1,4 +1,5 @@
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import tailwindcss from "@tailwindcss/vite"
 import { tanstackRouter } from "@tanstack/router-plugin/vite"
 import react from "@vitejs/plugin-react-swc"
@@ -6,13 +7,14 @@ import { defineConfig, loadEnv } from "vite"
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
+  const configDirectory = path.dirname(fileURLToPath(import.meta.url))
   const env = loadEnv(mode, process.cwd(), "")
   const backendTarget = env.VITE_DEV_API_URL || "http://127.0.0.1:8000"
 
   return {
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "./src"),
+        "@": path.resolve(configDirectory, "./src"),
       },
     },
     plugins: [

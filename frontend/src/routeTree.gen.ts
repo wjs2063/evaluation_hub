@@ -21,6 +21,7 @@ import { Route as LayoutEvaluationRagRouteImport } from './routes/_layout/evalua
 import { Route as LayoutEvaluationSingleTurnRouteImport } from './routes/_layout/evaluation-single-turn'
 import { Route as LayoutEvaluationsRouteImport } from './routes/_layout/evaluations'
 import { Route as LayoutItemsRouteImport } from './routes/_layout/items'
+import { Route as LayoutMetricsRouteImport } from './routes/_layout/metrics'
 import { Route as LayoutSchedulingRouteImport } from './routes/_layout/scheduling'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutEvaluationMultiTurnIndexRouteImport } from './routes/_layout/evaluation-multi-turn.index'
@@ -91,6 +92,11 @@ const LayoutItemsRoute = LayoutItemsRouteImport.update({
   path: '/items',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutMetricsRoute = LayoutMetricsRouteImport.update({
+  id: '/metrics',
+  path: '/metrics',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutSchedulingRoute = LayoutSchedulingRouteImport.update({
   id: '/scheduling',
   path: '/scheduling',
@@ -150,6 +156,7 @@ export interface FileRoutesByFullPath {
   '/evaluation-single-turn': typeof LayoutEvaluationSingleTurnRouteWithChildren
   '/evaluations': typeof LayoutEvaluationsRoute
   '/items': typeof LayoutItemsRoute
+  '/metrics': typeof LayoutMetricsRoute
   '/scheduling': typeof LayoutSchedulingRoute
   '/settings': typeof LayoutSettingsRoute
   '/evaluation-multi-turn/live-test': typeof LayoutEvaluationMultiTurnLiveTestRoute
@@ -168,6 +175,7 @@ export interface FileRoutesByTo {
   '/evaluation-rag': typeof LayoutEvaluationRagRoute
   '/evaluations': typeof LayoutEvaluationsRoute
   '/items': typeof LayoutItemsRoute
+  '/metrics': typeof LayoutMetricsRoute
   '/scheduling': typeof LayoutSchedulingRoute
   '/settings': typeof LayoutSettingsRoute
   '/': typeof LayoutIndexRoute
@@ -191,6 +199,7 @@ export interface FileRoutesById {
   '/_layout/evaluation-single-turn': typeof LayoutEvaluationSingleTurnRouteWithChildren
   '/_layout/evaluations': typeof LayoutEvaluationsRoute
   '/_layout/items': typeof LayoutItemsRoute
+  '/_layout/metrics': typeof LayoutMetricsRoute
   '/_layout/scheduling': typeof LayoutSchedulingRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/': typeof LayoutIndexRoute
@@ -215,6 +224,7 @@ export interface FileRouteTypes {
     | '/evaluation-single-turn'
     | '/evaluations'
     | '/items'
+    | '/metrics'
     | '/scheduling'
     | '/settings'
     | '/evaluation-multi-turn/live-test'
@@ -233,6 +243,7 @@ export interface FileRouteTypes {
     | '/evaluation-rag'
     | '/evaluations'
     | '/items'
+    | '/metrics'
     | '/scheduling'
     | '/settings'
     | '/'
@@ -255,6 +266,7 @@ export interface FileRouteTypes {
     | '/_layout/evaluation-single-turn'
     | '/_layout/evaluations'
     | '/_layout/items'
+    | '/_layout/metrics'
     | '/_layout/scheduling'
     | '/_layout/settings'
     | '/_layout/'
@@ -358,6 +370,13 @@ declare module '@tanstack/react-router' {
       path: '/items'
       fullPath: '/items'
       preLoaderRoute: typeof LayoutItemsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
+    '/_layout/metrics': {
+      id: '/_layout/metrics'
+      path: '/metrics'
+      fullPath: '/metrics'
+      preLoaderRoute: typeof LayoutMetricsRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/scheduling': {
@@ -466,6 +485,7 @@ interface LayoutRouteChildren {
   LayoutEvaluationSingleTurnRoute: typeof LayoutEvaluationSingleTurnRouteWithChildren
   LayoutEvaluationsRoute: typeof LayoutEvaluationsRoute
   LayoutItemsRoute: typeof LayoutItemsRoute
+  LayoutMetricsRoute: typeof LayoutMetricsRoute
   LayoutSchedulingRoute: typeof LayoutSchedulingRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
@@ -478,6 +498,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutEvaluationSingleTurnRoute: LayoutEvaluationSingleTurnRouteWithChildren,
   LayoutEvaluationsRoute: LayoutEvaluationsRoute,
   LayoutItemsRoute: LayoutItemsRoute,
+  LayoutMetricsRoute: LayoutMetricsRoute,
   LayoutSchedulingRoute: LayoutSchedulingRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutIndexRoute: LayoutIndexRoute,

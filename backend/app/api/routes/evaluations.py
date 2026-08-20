@@ -25,6 +25,13 @@ from app.core.config import settings
 from app.core.db import engine
 from app.core.security import decrypt_evaluation_headers, encrypt_evaluation_headers
 from app.cron_schedule import CronExpressionError, next_cron_run
+from app.custom_metrics import (
+    PLACEHOLDER_SYNTAX,
+    SCOPE_ALLOWED_KEYS,
+    CustomMetricPlaceholderError,
+    ensure_required_values,
+    parse_custom_metric_prompt,
+)
 from app.evaluation_jobs import enqueue_dataset_job
 from app.evaluation_metrics import (
     METRIC_CATALOG,
@@ -37,6 +44,13 @@ from app.evaluation_metrics import (
 )
 from app.models import (
     BulkDeleteRequest,
+    CustomMetric,
+    CustomMetricCreate,
+    CustomMetricPlaceholderContract,
+    CustomMetricPlaceholderContractsPublic,
+    CustomMetricPublic,
+    CustomMetricsPublic,
+    CustomMetricUpdate,
     EvaluationComparison,
     EvaluationComparisonCreate,
     EvaluationComparisonMode,
@@ -96,6 +110,7 @@ from app.models import (
     EvaluationScheduleTargetType,
     EvaluationScheduleType,
     EvaluationScheduleUpdate,
+    EvaluationScope,
     Message,
     MultiTurnDatasetCaseDocument,
     MultiTurnDatasetDocument,
@@ -688,11 +703,78 @@ def _metric_definition(
     item: EvaluationMetricProfileItem,
 ) -> EvaluationMetricDefinitionCreate:
     return EvaluationMetricDefinitionCreate(
-        metric_type=EvaluationMetricType(item.key),
+        metric_type=EvaluationMetricType(item.key)
+        if item.custom_metric_id is None
+        else None,
+        custom_metric_id=item.custom_metric_id,
         weight_percent=item.weight_percent,
         config=item.config,
         custom_instruction=item.custom_instruction,
+        custom_metric_name=item.display_name if item.custom_metric_id else None,
+        custom_metric_version=item.custom_metric_version,
+        custom_metric_prompt=item.custom_metric_prompt,
+        required_keys=item.required_keys,
     )
+
+
+def _custom_metric_conflict(
+    *, metric_name: str, metric_id: uuid.UUID, reason: str
+) -> HTTPException:
+    return HTTPException(
+        409,
+        (
+            f"CustomMetric '{metric_name}' ({metric_id})의 저장된 placeholder 상태가 "
+            f"올바르지 않습니다: {reason}. 메트릭 프롬프트를 현재 범위의 허용 key로 "
+            "다시 저장한 뒤 프로필을 새 버전으로 저장하세요."
+        ),
+    )
+
+
+def _validated_profile_custom_metric_keys(
+    item: EvaluationMetricProfileItem,
+) -> list[str]:
+    assert item.custom_metric_id is not None
+    if not item.custom_metric_prompt or not item.custom_metric_scope:
+        raise _custom_metric_conflict(
+            metric_name=item.display_name,
+            metric_id=item.custom_metric_id,
+            reason="프롬프트 또는 평가 범위 스냅샷이 없습니다",
+        )
+    try:
+        parsed = list(
+            parse_custom_metric_prompt(
+                item.custom_metric_prompt, item.custom_metric_scope
+            )
+        )
+    except (CustomMetricPlaceholderError, ValueError) as exc:
+        raise _custom_metric_conflict(
+            metric_name=item.display_name,
+            metric_id=item.custom_metric_id,
+            reason=str(exc),
+        ) from exc
+    if parsed != item.required_keys:
+        raise _custom_metric_conflict(
+            metric_name=item.display_name,
+            metric_id=item.custom_metric_id,
+            reason=(
+                "required_keys 스냅샷이 프롬프트와 일치하지 않습니다 "
+                f"(저장값: {item.required_keys}, 계산값: {parsed})"
+            ),
+        )
+    return parsed
+
+
+def _validated_current_custom_metric_keys(metric: CustomMetric) -> list[str]:
+    try:
+        return list(
+            parse_custom_metric_prompt(metric.prompt, metric.evaluation_scope.value)
+        )
+    except (CustomMetricPlaceholderError, ValueError) as exc:
+        raise _custom_metric_conflict(
+            metric_name=metric.name,
+            metric_id=metric.id,
+            reason=str(exc),
+        ) from exc
 
 
 async def _metric_profile_items(
@@ -715,19 +797,51 @@ async def _metric_profile_or_422(
     *,
     require_active: bool = True,
     expected_mode: EvaluationMode | None = None,
+    expected_scope: EvaluationScope | None = None,
 ) -> tuple[EvaluationMetricProfile, list[EvaluationMetricProfileItem]]:
     profile = await session.get(EvaluationMetricProfile, profile_id)
     if not profile:
         raise HTTPException(422, "Selected metric profile does not exist")
     if require_active and not profile.is_active:
         raise HTTPException(422, "Selected metric profile is inactive")
-    if expected_mode is not None and profile.evaluation_mode != expected_mode.value:
+    profile_scope = EvaluationScope(profile.evaluation_scope)
+    if expected_scope is None and expected_mode is not None:
+        expected_scope = EvaluationScope(expected_mode.value)
+    if expected_scope is not None and profile_scope != expected_scope:
         raise HTTPException(
-            422, "Selected metric profile has the wrong evaluation mode"
+            422, "Selected metric profile has the wrong evaluation scope"
         )
     items = await _metric_profile_items(session, profile.id)
     if not items:
         raise HTTPException(422, "Selected metric profile has no metrics")
+    if sum(item.weight_percent for item in items) != 100:
+        raise HTTPException(422, "Selected metric profile weights must add up to 100")
+    if len({item.key for item in items}) != len(items):
+        raise HTTPException(422, "Selected metric profile contains duplicate metrics")
+    for item in items:
+        if item.custom_metric_id is not None:
+            if item.custom_metric_scope != profile_scope.value:
+                raise HTTPException(
+                    422, "Custom metric scope does not match the selected profile"
+                )
+            _validated_profile_custom_metric_keys(item)
+        else:
+            try:
+                metric_type = EvaluationMetricType(item.key)
+            except ValueError as exc:
+                raise HTTPException(
+                    422, "Selected metric profile contains an unsupported metric"
+                ) from exc
+            metric_mode = catalog_definition(metric_type).evaluation_mode
+            expected_item_mode = (
+                EvaluationMode.MULTI_TURN
+                if profile_scope == EvaluationScope.MULTI_TURN
+                else EvaluationMode.SINGLE_TURN
+            )
+            if metric_mode != expected_item_mode:
+                raise HTTPException(
+                    422, "Built-in metric scope does not match the selected profile"
+                )
     return profile, items
 
 
@@ -736,45 +850,48 @@ def _metric_profile_public(
 ) -> EvaluationMetricProfilePublic:
     return EvaluationMetricProfilePublic(
         **profile.model_dump(),
-        metrics=[
-            EvaluationMetricDefinitionPublic(
-                id=item.id,
-                position=item.position,
-                display_name=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).display_name,
-                description=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).description,
-                required_fields=list(
-                    catalog_definition(
-                        _metric_definition(item).metric_type
-                    ).required_fields
-                ),
-                score_direction=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).score_direction,
-                uses_llm=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).uses_llm,
-                docs_url=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).docs_url,
-                evaluation_mode=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).evaluation_mode,
-                required_config=list(
-                    catalog_definition(
-                        _metric_definition(item).metric_type
-                    ).required_config
-                ),
-                supports_custom_instruction=catalog_definition(
-                    _metric_definition(item).metric_type
-                ).supports_custom_instruction,
-                **_metric_definition(item).model_dump(),
-            )
-            for item in items
-        ],
+        metrics=[_metric_definition_public(item) for item in items],
+    )
+
+
+def _metric_definition_public(
+    item: EvaluationMetricProfileItem,
+) -> EvaluationMetricDefinitionPublic:
+    definition = _metric_definition(item)
+    if item.custom_metric_id is not None:
+        return EvaluationMetricDefinitionPublic(
+            id=item.id,
+            position=item.position,
+            display_name=item.display_name,
+            description=item.criteria,
+            required_fields=item.required_keys,
+            score_direction="higher_is_better",
+            uses_llm=True,
+            docs_url="https://deepeval.com/docs/metrics-llm-evals",
+            evaluation_mode=(
+                EvaluationMode.MULTI_TURN
+                if item.custom_metric_scope == EvaluationScope.MULTI_TURN.value
+                else EvaluationMode.SINGLE_TURN
+            ),
+            required_config=[],
+            supports_custom_instruction=False,
+            **definition.model_dump(),
+        )
+    assert definition.metric_type is not None
+    catalog = catalog_definition(definition.metric_type)
+    return EvaluationMetricDefinitionPublic(
+        id=item.id,
+        position=item.position,
+        display_name=catalog.display_name,
+        description=catalog.description,
+        required_fields=list(catalog.required_fields),
+        score_direction=catalog.score_direction,
+        uses_llm=catalog.uses_llm,
+        docs_url=catalog.docs_url,
+        evaluation_mode=catalog.evaluation_mode,
+        required_config=list(catalog.required_config),
+        supports_custom_instruction=catalog.supports_custom_instruction,
+        **definition.model_dump(),
     )
 
 
@@ -786,6 +903,7 @@ def _metric_profile_snapshot(
         "name": profile.name,
         "version": profile.version,
         "evaluation_mode": profile.evaluation_mode,
+        "evaluation_scope": profile.evaluation_scope,
         "metrics": [
             {
                 "metric_type": item.key,
@@ -793,6 +911,16 @@ def _metric_profile_snapshot(
                 "weight_percent": item.weight_percent,
                 "config": item.config,
                 "custom_instruction": item.custom_instruction,
+                "custom_metric_id": (
+                    str(item.custom_metric_id) if item.custom_metric_id else None
+                ),
+                "custom_metric_version": item.custom_metric_version,
+                "custom_metric_prompt": item.custom_metric_prompt,
+                "required_keys": (
+                    _validated_profile_custom_metric_keys(item)
+                    if item.custom_metric_id is not None
+                    else item.required_keys
+                ),
             }
             for item in items
         ],
@@ -805,7 +933,10 @@ def _dataset_public(
     row_count: int | None = None,
 ) -> EvaluationDatasetPublic:
     return EvaluationDatasetPublic(
-        **dataset.model_dump(exclude={"endpoint_url", "headers", "method"}),
+        **dataset.model_dump(
+            exclude={"endpoint_url", "headers", "method", "threshold"}
+        ),
+        threshold=float(dataset.threshold),
         test_type="single_turn",
         row_count=len(rows) if row_count is None else row_count,
         rows=[EvaluationDatasetRowPublic.model_validate(row) for row in rows],
@@ -971,10 +1102,16 @@ def _html_report(
     def score(value: float | None) -> str:
         return f"{value:.2f}점" if value is not None else "점수 없음"
 
+    def required_keys(item: dict[Any, Any]) -> str:
+        value = item.get("required_keys")
+        return ", ".join(str(key) for key in value) if isinstance(value, list) else "-"
+
     profile_metrics = []
     profile_name = "-"
+    profile_scope = "-"
     if isinstance(metric_profile_snapshot, dict):
         profile_name = str(metric_profile_snapshot.get("name") or "-")
+        profile_scope = str(metric_profile_snapshot.get("evaluation_scope") or "-")
         raw_metrics = metric_profile_snapshot.get("metrics")
         if isinstance(raw_metrics, list):
             profile_metrics = [item for item in raw_metrics if isinstance(item, dict)]
@@ -982,6 +1119,10 @@ def _html_report(
         "<tr>"
         f"<td>{escaped(item.get('display_name') or item.get('metric_type') or item.get('key'))}</td>"
         f"<td>{escaped(item.get('weight_percent'))}%</td>"
+        f"<td>{escaped(item.get('custom_metric_id') or '-')}</td>"
+        f"<td>{escaped(item.get('custom_metric_version') or '-')}</td>"
+        f"<td>{escaped(required_keys(item))}</td>"
+        f"<td>{escaped(item.get('custom_metric_prompt') or '-')}</td>"
         "</tr>"
         for item in profile_metrics
     )
@@ -1017,8 +1158,9 @@ def _html_report(
 body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#292524;margin:0;background:#fafaf9}}main{{max-width:1120px;margin:0 auto;padding:32px}}h1{{margin-bottom:6px}}h2{{margin-top:32px}}.muted{{color:#78716c}}.summary{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:24px 0}}.card,.evidence{{background:white;border:1px solid #e7e5e4;border-radius:10px;padding:16px}}.value{{font-size:20px;font-weight:700;margin-top:6px}}table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{border:1px solid #e7e5e4;padding:9px;text-align:left;vertical-align:top}}th{{background:#f5f5f4}}dl{{display:grid;grid-template-columns:150px 1fr;gap:8px}}dt{{font-weight:600}}dd{{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}}.evidence{{margin:14px 0}}.error{{color:#b91c1c}}@media(max-width:700px){{main{{padding:16px}}.summary{{grid-template-columns:1fr 1fr}}table{{display:block;overflow-x:auto}}dl{{grid-template-columns:1fr}}}}@media print{{body{{background:white}}.evidence{{break-inside:avoid}}}}
 </style></head><body><main>
 <header><p class="muted">EvaluationHub · 싱글턴 품질 테스트</p><h1>{escaped(dataset.name)}</h1><p>{escaped(dataset.description or "설명 없음")}</p></header>
-<div class="summary"><div class="card"><span class="muted">실행자</span><div class="value">{escaped(executor.full_name or executor.email)}</div></div><div class="card"><span class="muted">실행시각</span><div class="value">{escaped(run.created_at)}</div></div><div class="card"><span class="muted">종합 점수</span><div class="value">{score(run.average_score)}</div></div><div class="card"><span class="muted">통과</span><div class="value">{run.passed}/{run.total}</div></div></div>
-<h2>평가 프로파일</h2><p class="muted">{escaped(profile_name)} · 실행 스냅샷 v{escaped(run.metric_profile_version or "-")} · 기준 가중치 합계</p><table><thead><tr><th>평가지표</th><th>가중치</th></tr></thead><tbody>{profile_rows or '<tr><td colspan="2">지표 프로파일 스냅샷이 없습니다.</td></tr>'}</tbody></table>
+<div class="summary"><div class="card"><span class="muted">실행자</span><div class="value">{escaped(executor.full_name or executor.email)}</div></div><div class="card"><span class="muted">실행시각</span><div class="value">{escaped(run.created_at)}</div></div><div class="card"><span class="muted">종합 점수</span><div class="value">{score(run.average_score)}</div></div><div class="card"><span class="muted">통과 기준</span><div class="value">{score(float(dataset.threshold))}</div></div></div>
+<p>총점 = Σ(메트릭 0~100 점수 × 가중치 / 100), 반올림은 ROUND_HALF_UP 소수점 셋째 자리입니다. 통과 {run.passed}/{run.total}.</p>
+<h2>평가 프로파일</h2><p class="muted">{escaped(profile_name)} · 범위 {escaped(profile_scope)} · 실행 스냅샷 v{escaped(run.metric_profile_version or "-")}</p><table><thead><tr><th>평가지표</th><th>가중치</th><th>CustomMetric ID</th><th>버전</th><th>필요 키</th><th>프롬프트</th></tr></thead><tbody>{profile_rows or '<tr><td colspan="6">지표 프로파일 스냅샷이 없습니다.</td></tr>'}</tbody></table>
 <h2>행별 결과</h2>{"".join(evidence)}
 </main></body></html>"""
 
@@ -1029,7 +1171,8 @@ def _scenario_public(
     count: int | None = None,
 ) -> EvaluationScenarioPublic:
     return EvaluationScenarioPublic(
-        **scenario.model_dump(),
+        **scenario.model_dump(exclude={"threshold"}),
+        threshold=float(scenario.threshold),
         test_type="multi_turn",
         evaluation_type="multi_turn",
         turn_count=len(turns) if count is None else count,
@@ -1148,22 +1291,203 @@ async def read_integrations(_current_user: CurrentUser) -> IntegrationsResponse:
     )
 
 
+def _custom_metric_public(metric: CustomMetric) -> CustomMetricPublic:
+    return CustomMetricPublic(
+        **metric.model_dump(),
+        required_keys=list(
+            parse_custom_metric_prompt(metric.prompt, metric.evaluation_scope.value)
+        ),
+    )
+
+
+@router.get(
+    "/custom-metric-placeholder-contracts",
+    response_model=CustomMetricPlaceholderContractsPublic,
+)
+async def read_custom_metric_placeholder_contracts(
+    _user: CurrentUser,
+) -> CustomMetricPlaceholderContractsPublic:
+    data = [
+        CustomMetricPlaceholderContract(
+            evaluation_scope=scope,
+            syntax=PLACEHOLDER_SYNTAX,
+            requires_at_least_one=True,
+            allowed_keys=list(SCOPE_ALLOWED_KEYS[scope.value]),
+        )
+        for scope in EvaluationScope
+    ]
+    return CustomMetricPlaceholderContractsPublic(data=data, count=len(data))
+
+
+@router.get("/custom-metrics", response_model=CustomMetricsPublic)
+async def read_custom_metrics(
+    session: SessionDep,
+    _user: CurrentUser,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=200),
+    evaluation_scope: EvaluationScope | None = None,
+    is_active: bool | None = None,
+) -> CustomMetricsPublic:
+    statement = select(CustomMetric).order_by(col(CustomMetric.updated_at).desc())
+    if evaluation_scope is not None:
+        statement = statement.where(
+            CustomMetric.evaluation_scope == evaluation_scope.value
+        )
+    if is_active is not None:
+        statement = statement.where(CustomMetric.is_active == is_active)
+    count = int(
+        (
+            await session.exec(select(func.count()).select_from(statement.subquery()))
+        ).one()
+    )
+    metrics = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    return CustomMetricsPublic(
+        data=[_custom_metric_public(metric) for metric in metrics], count=count
+    )
+
+
+@router.post("/custom-metrics", response_model=CustomMetricPublic)
+async def create_custom_metric(
+    metric_in: CustomMetricCreate, session: SessionDep, user: CurrentUser
+) -> CustomMetricPublic:
+    metric = CustomMetric(
+        **metric_in.model_dump(), created_by_id=user.id, updated_by_id=user.id
+    )
+    session.add(metric)
+    await session.commit()
+    await session.refresh(metric)
+    return _custom_metric_public(metric)
+
+
+@router.put("/custom-metrics/{metric_id}", response_model=CustomMetricPublic)
+async def update_custom_metric(
+    metric_id: uuid.UUID,
+    metric_in: CustomMetricUpdate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> CustomMetricPublic:
+    metric = await session.get(CustomMetric, metric_id)
+    if metric is None:
+        raise HTTPException(404, "Custom metric not found")
+    if (
+        metric_in.expected_version is not None
+        and metric_in.expected_version != metric.version
+    ):
+        raise HTTPException(409, "Custom metric was modified by another user")
+    metric.sqlmodel_update(metric_in.model_dump(exclude={"expected_version"}))
+    metric.version += 1
+    metric.updated_by_id = user.id
+    metric.updated_at = get_datetime_utc()
+    session.add(metric)
+    await session.commit()
+    await session.refresh(metric)
+    return _custom_metric_public(metric)
+
+
+@router.delete("/custom-metrics/{metric_id}")
+async def delete_custom_metric(
+    metric_id: uuid.UUID, session: SessionDep, _user: CurrentUser
+) -> Message:
+    metric = await session.get(CustomMetric, metric_id)
+    if metric is None:
+        raise HTTPException(404, "Custom metric not found")
+    reference_count = int(
+        (
+            await session.exec(
+                select(func.count())
+                .select_from(EvaluationMetricProfileItem)
+                .where(EvaluationMetricProfileItem.custom_metric_id == metric.id)
+            )
+        ).one()
+    )
+    if reference_count:
+        raise HTTPException(409, "Referenced custom metrics cannot be deleted")
+    await session.delete(metric)
+    await session.commit()
+    return Message(message="Custom metric deleted successfully")
+
+
+async def _build_metric_profile_items(
+    session: SessionDep,
+    profile: EvaluationMetricProfile,
+    metrics: list[EvaluationMetricDefinitionCreate],
+) -> list[EvaluationMetricProfileItem]:
+    items: list[EvaluationMetricProfileItem] = []
+    profile_scope = EvaluationScope(profile.evaluation_scope)
+    for position, metric in enumerate(metrics):
+        if metric.custom_metric_id is not None:
+            custom = await session.get(CustomMetric, metric.custom_metric_id)
+            if custom is None:
+                raise HTTPException(422, "Selected custom metric does not exist")
+            if not custom.is_active:
+                raise HTTPException(422, "Selected custom metric is inactive")
+            if custom.evaluation_scope != profile_scope:
+                raise HTTPException(
+                    422, "Custom metric scope must match the profile scope"
+                )
+            required_keys = _validated_current_custom_metric_keys(custom)
+            items.append(
+                EvaluationMetricProfileItem(
+                    profile_id=profile.id,
+                    position=position,
+                    key=f"custom:{custom.id}",
+                    display_name=custom.name,
+                    criteria=custom.description or "사용자 정의 G-Eval 메트릭",
+                    weight_percent=metric.weight_percent,
+                    evaluation_params=required_keys,
+                    custom_metric_id=custom.id,
+                    custom_metric_version=custom.version,
+                    custom_metric_prompt=custom.prompt,
+                    custom_metric_scope=custom.evaluation_scope.value,
+                    required_keys=required_keys,
+                )
+            )
+            continue
+        if metric.metric_type is None:
+            raise HTTPException(422, "Metric identity is missing")
+        catalog = catalog_definition(metric.metric_type)
+        expected_mode = (
+            EvaluationMode.MULTI_TURN
+            if profile_scope == EvaluationScope.MULTI_TURN
+            else EvaluationMode.SINGLE_TURN
+        )
+        if catalog.evaluation_mode != expected_mode:
+            raise HTTPException(422, "Metric scope must match the profile scope")
+        items.append(
+            EvaluationMetricProfileItem(
+                profile_id=profile.id,
+                position=position,
+                key=metric.metric_type.value,
+                display_name=catalog.display_name,
+                criteria=catalog.description,
+                weight_percent=metric.weight_percent,
+                evaluation_params=list(catalog.required_fields),
+                config=metric.config,
+                custom_instruction=metric.custom_instruction,
+            )
+        )
+    return items
+
+
 @router.get("/metric-profiles", response_model=EvaluationMetricProfilesPublic)
 async def read_metric_profiles(
     session: SessionDep,
-    user: CurrentUser,
+    _user: CurrentUser,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=10, ge=1, le=200),
     evaluation_mode: EvaluationMode | None = None,
+    evaluation_scope: EvaluationScope | None = None,
 ) -> EvaluationMetricProfilesPublic:
     statement = select(EvaluationMetricProfile).order_by(
         col(EvaluationMetricProfile.updated_at).desc()
     )
-    if not user.is_superuser:
-        statement = statement.where(EvaluationMetricProfile.is_active == True)  # noqa: E712
-    if evaluation_mode is not None:
+    if evaluation_scope is not None:
         statement = statement.where(
-            EvaluationMetricProfile.evaluation_mode == evaluation_mode.value
+            EvaluationMetricProfile.evaluation_scope == evaluation_scope.value
+        )
+    elif evaluation_mode is not None:
+        statement = statement.where(
+            EvaluationMetricProfile.evaluation_scope == evaluation_mode.value
         )
     count = int(
         (
@@ -1209,27 +1533,12 @@ async def read_metric_catalog(
 async def create_metric_profile(
     profile_in: EvaluationMetricProfileCreate,
     session: SessionDep,
-    _admin: CurrentSuperuser,
+    _user: CurrentUser,
 ) -> EvaluationMetricProfilePublic:
     profile = EvaluationMetricProfile(**profile_in.model_dump(exclude={"metrics"}))
     session.add(profile)
     await session.flush()
-    items = [
-        EvaluationMetricProfileItem(
-            profile_id=profile.id,
-            position=position,
-            key=metric.metric_type.value,
-            display_name=catalog_definition(metric.metric_type).display_name,
-            criteria=catalog_definition(metric.metric_type).description,
-            weight_percent=metric.weight_percent,
-            evaluation_params=list(
-                catalog_definition(metric.metric_type).required_fields
-            ),
-            config=metric.config,
-            custom_instruction=metric.custom_instruction,
-        )
-        for position, metric in enumerate(profile_in.metrics)
-    ]
+    items = await _build_metric_profile_items(session, profile, profile_in.metrics)
     session.add_all(items)
     await session.commit()
     await session.refresh(profile)
@@ -1243,12 +1552,19 @@ async def update_metric_profile(
     profile_id: uuid.UUID,
     profile_in: EvaluationMetricProfileUpdate,
     session: SessionDep,
-    _admin: CurrentSuperuser,
+    _user: CurrentUser,
 ) -> EvaluationMetricProfilePublic:
     profile = await session.get(EvaluationMetricProfile, profile_id)
     if not profile:
         raise HTTPException(404, "Metric profile not found")
-    profile.sqlmodel_update(profile_in.model_dump(exclude={"metrics"}))
+    if (
+        profile_in.expected_version is not None
+        and profile_in.expected_version != profile.version
+    ):
+        raise HTTPException(409, "Metric profile was modified by another user")
+    profile.sqlmodel_update(
+        profile_in.model_dump(exclude={"metrics", "expected_version"})
+    )
     profile.version += 1
     profile.updated_at = get_datetime_utc()
     await session.exec(
@@ -1256,22 +1572,7 @@ async def update_metric_profile(
             col(EvaluationMetricProfileItem.profile_id) == profile.id
         )
     )
-    items = [
-        EvaluationMetricProfileItem(
-            profile_id=profile.id,
-            position=position,
-            key=metric.metric_type.value,
-            display_name=catalog_definition(metric.metric_type).display_name,
-            criteria=catalog_definition(metric.metric_type).description,
-            weight_percent=metric.weight_percent,
-            evaluation_params=list(
-                catalog_definition(metric.metric_type).required_fields
-            ),
-            config=metric.config,
-            custom_instruction=metric.custom_instruction,
-        )
-        for position, metric in enumerate(profile_in.metrics)
-    ]
+    items = await _build_metric_profile_items(session, profile, profile_in.metrics)
     session.add(profile)
     session.add_all(items)
     await session.commit()
@@ -1298,6 +1599,7 @@ async def _delete_metric_profiles(ids: list[uuid.UUID], session: SessionDep) -> 
         (EvaluationRun, EvaluationRun.metric_profile_id),
         (EvaluationScenarioRun, EvaluationScenarioRun.metric_profile_id),
         (EvaluationComparison, EvaluationComparison.metric_profile_id),
+        (EvaluationJob, EvaluationJob.metric_profile_id),
     ):
         references += int(
             (
@@ -1315,7 +1617,7 @@ async def _delete_metric_profiles(ids: list[uuid.UUID], session: SessionDep) -> 
 
 @router.delete("/metric-profiles/{profile_id}")
 async def delete_metric_profile(
-    profile_id: uuid.UUID, session: SessionDep, _admin: CurrentSuperuser
+    profile_id: uuid.UUID, session: SessionDep, _user: CurrentUser
 ) -> Message:
     await _delete_metric_profiles([profile_id], session)
     return Message(message="Metric profile deleted successfully")
@@ -1323,7 +1625,7 @@ async def delete_metric_profile(
 
 @router.post("/metric-profiles/bulk-delete")
 async def bulk_delete_metric_profiles(
-    request: BulkDeleteRequest, session: SessionDep, _admin: CurrentSuperuser
+    request: BulkDeleteRequest, session: SessionDep, _user: CurrentUser
 ) -> Message:
     await _delete_metric_profiles(request.ids, session)
     return Message(message=f"Deleted {len(request.ids)} metric profiles")
@@ -1838,7 +2140,7 @@ async def _validate_dataset_job_request(
     metric_profile_id: uuid.UUID | None = None,
 ) -> None:
     dataset = await _dataset_or_404(session, user, dataset_id)
-    _ensure_evaluator_ready(dataset.evaluator)
+    _validate_evaluator(dataset.evaluator)
     if dataset.evaluator == "deepeval":
         selected_profile_id = metric_profile_id or dataset.metric_profile_id
         if not selected_profile_id:
@@ -1846,6 +2148,7 @@ async def _validate_dataset_job_request(
         await _metric_profile_or_422(
             session, selected_profile_id, expected_mode=EvaluationMode.SINGLE_TURN
         )
+    _ensure_evaluator_ready(dataset.evaluator)
     await _endpoint_or_422(session, dataset.endpoint_id)
     row_count = await _count(
         session, EvaluationDatasetRow, EvaluationDatasetRow.dataset_id == dataset_id
@@ -1933,7 +2236,7 @@ async def _execute_saved_dataset(
 ) -> SavedRun:
     async with _run_semaphore:
         dataset = await _dataset_or_404(session, user, dataset_id)
-        _ensure_evaluator_ready(dataset.evaluator)
+        _validate_evaluator(dataset.evaluator)
         metric_profile: EvaluationMetricProfile | None = None
         metric_profile_items: list[EvaluationMetricProfileItem] = []
         metric_definitions: list[EvaluationMetricDefinitionCreate] | None = None
@@ -1947,6 +2250,7 @@ async def _execute_saved_dataset(
             ]
         if dataset.evaluator == "deepeval" and not metric_definitions:
             raise HTTPException(422, "DeepEval datasets require a metric profile")
+        _ensure_evaluator_ready(dataset.evaluator)
         endpoint = await _endpoint_or_422(
             session, endpoint_override_id or dataset.endpoint_id
         )
@@ -1967,6 +2271,24 @@ async def _execute_saved_dataset(
             raise HTTPException(
                 422, f"A run can contain at most {MAX_EXECUTION_ROWS} rows"
             )
+        for definition in metric_definitions or []:
+            if definition.custom_metric_id is None:
+                continue
+            for row in rows:
+                try:
+                    ensure_required_values(
+                        [
+                            key
+                            for key in definition.required_keys
+                            if key != "actual_output"
+                        ],
+                        {
+                            "input": row.input,
+                            "expected_output": row.expected_output,
+                        },
+                    )
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
         baseline_rows: list[EvaluationRunRow] = []
         if baseline_run_id:
             baseline = await session.get(EvaluationRun, baseline_run_id)
@@ -2494,8 +2816,18 @@ async def download_comparison_report(
     if not comparison or (not user.is_superuser and comparison.owner_id != user.id):
         raise HTTPException(404, "Evaluation comparison not found")
 
+    target = (
+        await session.get(EvaluationDataset, comparison.dataset_id)
+        if comparison.dataset_id
+        else await session.get(EvaluationScenario, comparison.scenario_id)
+    )
+
     def escaped(value: object | None) -> str:
         return html.escape("" if value is None else str(value), quote=True)
+
+    def required_keys(item: dict[Any, Any]) -> str:
+        value = item.get("required_keys")
+        return ", ".join(str(key) for key in value) if isinstance(value, list) else "-"
 
     rows = "".join(
         "<tr>"
@@ -2513,7 +2845,25 @@ async def download_comparison_report(
         + "</tr>"
         for item in comparison.results
     )
-    report = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>A/B 비교 평가 리포트</title><style>body{{font-family:system-ui;margin:32px;color:#222}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}}.cards{{display:flex;gap:16px;margin:20px 0}}.card{{border:1px solid #ddd;padding:12px}}</style></head><body><h1>A/B 비교 평가 리포트</h1><p>상태 {escaped(comparison.status)} · 모드 {escaped(comparison.comparison_mode)}</p><div class="cards"><div class="card">비교 가능 {comparison.comparable_count}</div><div class="card">A 승 {comparison.winner_a_count}</div><div class="card">B 승 {comparison.winner_b_count}</div><div class="card">동점 {comparison.tie_count}</div></div><table><thead><tr><th>입력</th><th>A 점수</th><th>B 점수</th><th>차이</th><th>승자</th><th>한국어 사유</th></tr></thead><tbody>{rows}</tbody></table></body></html>"""
+    snapshot = comparison.metric_profile_snapshot or {}
+    raw_profile_metrics = snapshot.get("metrics") if isinstance(snapshot, dict) else []
+    profile_metrics = (
+        raw_profile_metrics if isinstance(raw_profile_metrics, list) else []
+    )
+    profile_rows = "".join(
+        "<tr>"
+        f"<td>{escaped(item.get('display_name') or item.get('metric_type'))}</td>"
+        f"<td>{escaped(item.get('weight_percent'))}%</td>"
+        f"<td>{escaped(item.get('custom_metric_id') or '-')}</td>"
+        f"<td>{escaped(item.get('custom_metric_version') or '-')}</td>"
+        f"<td>{escaped(required_keys(item))}</td>"
+        f"<td>{escaped(item.get('custom_metric_prompt') or '-')}</td>"
+        "</tr>"
+        for item in profile_metrics
+        if isinstance(item, dict)
+    )
+    threshold = float(target.threshold) if target is not None else 0
+    report = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>A/B 비교 평가 리포트</title><style>body{{font-family:system-ui;margin:32px;color:#222}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;white-space:pre-wrap}}.cards{{display:flex;gap:16px;margin:20px 0;flex-wrap:wrap}}.card{{border:1px solid #ddd;padding:12px}}</style></head><body><h1>A/B 비교 평가 리포트</h1><p>상태 {escaped(comparison.status)} · 모드 {escaped(comparison.comparison_mode)} · 범위 {escaped(snapshot.get("evaluation_scope") if isinstance(snapshot, dict) else "-")} · 프로필 v{escaped(comparison.metric_profile_version or "-")} · 임계값 {threshold:.3f}점</p><p>절대점수 총점 = Σ(메트릭 0~100 점수 × 가중치 / 100). 상대평가 전용 모드는 임의의 절대점수를 만들지 않습니다.</p><div class="cards"><div class="card">비교 가능 {comparison.comparable_count}</div><div class="card">A 승 {comparison.winner_a_count}</div><div class="card">B 승 {comparison.winner_b_count}</div><div class="card">동점 {comparison.tie_count}</div></div><h2>프로필 스냅샷</h2><table><thead><tr><th>지표</th><th>가중치</th><th>CustomMetric ID</th><th>버전</th><th>필요 키</th><th>프롬프트</th></tr></thead><tbody>{profile_rows or '<tr><td colspan="6">스냅샷 없음</td></tr>'}</tbody></table><h2>비교 결과</h2><table><thead><tr><th>입력</th><th>A 점수</th><th>B 점수</th><th>차이</th><th>승자</th><th>한국어 사유</th></tr></thead><tbody>{rows}</tbody></table></body></html>"""
     return HTMLResponse(
         content=report,
         headers={
@@ -2601,6 +2951,17 @@ async def _validate_scenario_job_request(
     baseline_run_id: uuid.UUID | None = None,
 ) -> EvaluationScenario:
     scenario = await _scenario_or_404(session, user, scenario_id)
+    _validate_evaluator(scenario.evaluator)
+    if scenario.evaluator == "deepeval":
+        if scenario.metric_profile_id is None:
+            raise HTTPException(
+                422, "DeepEval multi-turn datasets require a metric profile"
+            )
+        await _metric_profile_or_422(
+            session,
+            scenario.metric_profile_id,
+            expected_scope=EvaluationScope.MULTI_TURN,
+        )
     _ensure_evaluator_ready(scenario.evaluator)
     await _endpoint_or_422(session, scenario.endpoint_id)
     turn_count = await _count(
@@ -3454,7 +3815,7 @@ async def _execute_scenario(
 ) -> ScenarioRunPublic:
     async with _run_semaphore:
         scenario = await _scenario_or_404(session, user, scenario_id)
-        _ensure_evaluator_ready(scenario.evaluator)
+        _validate_evaluator(scenario.evaluator)
         endpoint = await _endpoint_or_422(
             session, endpoint_override_id or scenario.endpoint_id
         )
@@ -3469,6 +3830,7 @@ async def _execute_scenario(
             metric_profile, metric_profile_items = await _metric_profile_or_422(
                 session, selected_profile_id, expected_mode=EvaluationMode.MULTI_TURN
             )
+        _ensure_evaluator_ready(scenario.evaluator)
         turns = list(
             (
                 await session.exec(
@@ -3480,6 +3842,16 @@ async def _execute_scenario(
         )
         if not turns:
             raise HTTPException(422, "Add at least one turn before running a scenario")
+        for item in metric_profile_items:
+            if (
+                item.custom_metric_id is not None
+                and "expected_outcome" in item.required_keys
+                and not any(turn.expected_output.strip() for turn in turns)
+            ):
+                raise HTTPException(
+                    422,
+                    "Custom metric requires non-empty execution data: expected_outcome",
+                )
         baseline_turns: list[EvaluationScenarioRunTurn] = []
         if baseline_run_id:
             baseline = await session.get(EvaluationScenarioRun, baseline_run_id)
@@ -3610,6 +3982,12 @@ async def _execute_scenario(
                 conversation_results = await evaluate_conversation_metrics(
                     [_metric_definition(item) for item in metric_profile_items],
                     turns=conversation,
+                    expected_outcome="\n".join(
+                        f"{index + 1}. {turn.expected_output}"
+                        for index, turn in enumerate(turns)
+                        if turn.expected_output.strip()
+                    )
+                    or None,
                     model_name=settings.DEEPEVAL_MODEL,
                 )
                 run.metrics = [result.model_dump() for result in conversation_results]
@@ -3775,10 +4153,18 @@ async def download_scenario_run_report(
     session: SessionDep,
     user: CurrentUser,
 ) -> HTMLResponse:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    run = await session.get(EvaluationScenarioRun, run_id)
+    if run is None or run.scenario_id != scenario.id:
+        raise HTTPException(404, "Evaluation scenario run not found")
     result = await read_scenario_run(scenario_id, run_id, session, user)
 
     def escaped(value: object | None) -> str:
         return html.escape("" if value is None else str(value), quote=True)
+
+    def required_keys(item: dict[Any, Any]) -> str:
+        value = item.get("required_keys")
+        return ", ".join(str(key) for key in value) if isinstance(value, list) else "-"
 
     metric_rows = "".join(
         "<tr>"
@@ -3786,7 +4172,8 @@ async def download_scenario_run_report(
         f"<td>{metric.score:.3f}점</td>"
         f"<td>{escaped(metric.weight_percent)}%</td>"
         f"<td>{escaped(metric.weighted_score)}점</td>"
-        f"<td>{escaped(metric.reason or metric.error)}</td>"
+        f"<td>{escaped(metric.reason)}</td>"
+        f"<td>{escaped(metric.error)}</td>"
         "</tr>"
         for metric in result.metrics
     )
@@ -3801,7 +4188,23 @@ async def download_scenario_run_report(
         "</tr>"
         for turn in result.turns
     )
-    report = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>멀티턴 평가 리포트</title><style>body{{font-family:system-ui;margin:32px;color:#292524}}table{{width:100%;border-collapse:collapse;margin:16px 0}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;white-space:pre-wrap}}.summary{{display:flex;gap:16px;flex-wrap:wrap}}.card{{border:1px solid #ddd;padding:12px;border-radius:8px}}</style></head><body><h1>{escaped(result.scenario_name)} 멀티턴 평가 리포트</h1><div class="summary"><div class="card">종합 {result.overall_score:.3f}점</div><div class="card">{"통과" if result.overall_passed else "실패"}</div><div class="card">턴 {result.passed}/{result.total} 통과</div></div><p>{escaped(result.overall_reason)}</p><h2>프로필 지표</h2><table><thead><tr><th>지표</th><th>평균</th><th>가중치</th><th>기여점수</th><th>한국어 사유</th></tr></thead><tbody>{metric_rows}</tbody></table><h2>턴별 증거</h2><table><thead><tr><th>턴</th><th>요청</th><th>기대 응답</th><th>실제 응답</th><th>점수</th><th>사유</th></tr></thead><tbody>{turn_rows}</tbody></table></body></html>"""
+    snapshot = run.metric_profile_snapshot or {}
+    raw_snapshot_metrics = snapshot.get("metrics") if isinstance(snapshot, dict) else []
+    snapshot_metrics = (
+        raw_snapshot_metrics if isinstance(raw_snapshot_metrics, list) else []
+    )
+    custom_rows = "".join(
+        "<tr>"
+        f"<td>{escaped(item.get('display_name') or item.get('metric_type'))}</td>"
+        f"<td>{escaped(item.get('custom_metric_id') or '-')}</td>"
+        f"<td>{escaped(item.get('custom_metric_version') or '-')}</td>"
+        f"<td>{escaped(required_keys(item))}</td>"
+        f"<td>{escaped(item.get('custom_metric_prompt') or '-')}</td>"
+        "</tr>"
+        for item in snapshot_metrics
+        if isinstance(item, dict)
+    )
+    report = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>멀티턴 평가 리포트</title><style>body{{font-family:system-ui;margin:32px;color:#292524}}table{{width:100%;border-collapse:collapse;margin:16px 0}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;white-space:pre-wrap}}.summary{{display:flex;gap:16px;flex-wrap:wrap}}.card{{border:1px solid #ddd;padding:12px;border-radius:8px}}</style></head><body><h1>{escaped(result.scenario_name)} 멀티턴 평가 리포트</h1><div class="summary"><div class="card">종합 {result.overall_score:.3f}점</div><div class="card">임계값 {float(scenario.threshold):.3f}점</div><div class="card">{"통과" if result.overall_passed else "실패"}</div><div class="card">턴 {result.passed}/{result.total} 통과</div></div><p>총점 = Σ(메트릭 0~100 점수 × 가중치 / 100), ROUND_HALF_UP 소수점 셋째 자리. 프로필 범위 {escaped(snapshot.get("evaluation_scope") if isinstance(snapshot, dict) else "-")} · v{escaped(run.metric_profile_version or "-")}.</p><p>{escaped(result.overall_reason)}</p><h2>프로필 스냅샷</h2><table><thead><tr><th>지표</th><th>CustomMetric ID</th><th>버전</th><th>필요 키</th><th>프롬프트</th></tr></thead><tbody>{custom_rows or '<tr><td colspan="5">스냅샷 없음</td></tr>'}</tbody></table><h2>프로필 지표</h2><table><thead><tr><th>지표</th><th>0~100 점수</th><th>가중치</th><th>기여점수</th><th>한국어 사유</th><th>오류</th></tr></thead><tbody>{metric_rows}</tbody></table><h2>턴별 증거</h2><table><thead><tr><th>턴</th><th>요청</th><th>기대 응답</th><th>실제 응답</th><th>점수</th><th>사유</th></tr></thead><tbody>{turn_rows}</tbody></table></body></html>"""
     return HTMLResponse(
         content=report,
         headers={
@@ -3814,26 +4217,71 @@ async def download_scenario_run_report(
 
 @router.post("/run", response_model=EvaluationSummary)
 async def run_evaluation(
+    session: SessionDep,
     _user: CurrentUser,
     file: UploadFile = File(description="UTF-8 CSV or JSON dataset"),
     framework: Framework = Form(default="local"),
     threshold: float = Form(default=70, ge=0, le=100),
+    metric_profile_id: uuid.UUID | None = Form(default=None),
 ) -> EvaluationSummary:
-    if framework != "local":
-        raise HTTPException(
-            501, f"{framework} is scaffolded but not configured. Use local for now."
-        )
+    if framework == "langfuse":
+        raise HTTPException(501, "langfuse is scaffolded but not configured.")
+    _validate_evaluator(framework)
     content = await file.read(MAX_DATASET_BYTES + 1)
     if len(content) > MAX_DATASET_BYTES:
         raise HTTPException(413, "Dataset cannot exceed 5 MB")
-    evaluated = [
-        _evaluate_row(row, index, threshold)
-        for index, row in enumerate(parse_dataset(file.filename or "dataset", content))
-    ]
+    rows = parse_dataset(file.filename or "dataset", content)
+    metric_definitions: list[EvaluationMetricDefinitionCreate] | None = None
+    profile: EvaluationMetricProfile | None = None
+    if framework == "deepeval":
+        if metric_profile_id is None:
+            raise HTTPException(422, "DeepEval quick uploads require a metric profile")
+        profile, items = await _metric_profile_or_422(
+            session,
+            metric_profile_id,
+            expected_scope=EvaluationScope.QUICK_UPLOAD,
+        )
+        metric_definitions = [_metric_definition(item) for item in items]
+        for definition in metric_definitions:
+            if definition.custom_metric_id is None:
+                continue
+            for row in rows:
+                try:
+                    ensure_required_values(
+                        definition.required_keys,
+                        {
+                            "input": row.get("input"),
+                            "actual_output": row.get("actual_output"),
+                            "expected_output": row.get("expected_output"),
+                        },
+                    )
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from exc
+    _ensure_evaluator_ready(framework)
+    evaluated: list[EvaluationRow] = []
+    for index, row in enumerate(rows):
+        if framework == "local":
+            evaluated.append(_evaluate_row(row, index, threshold))
+        else:
+            evaluated.append(
+                await _evaluate_live_row(
+                    str(row["input"]),
+                    str(row["actual_output"]),
+                    str(row["expected_output"]),
+                    index,
+                    threshold,
+                    "deepeval",
+                    metric_definitions,
+                )
+            )
     passed = sum(row.passed for row in evaluated)
     return EvaluationSummary(
         framework=framework,
-        evaluator="deterministic-baseline-v1",
+        evaluator=(
+            f"DeepEval · {profile.name} v{profile.version}"
+            if profile is not None
+            else "deterministic-baseline-v1"
+        ),
         total=len(evaluated),
         passed=passed,
         failed=len(evaluated) - passed,

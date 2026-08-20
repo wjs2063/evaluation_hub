@@ -256,12 +256,18 @@ def test_html_report_uses_saved_metric_snapshot_and_escapes_evidence() -> None:
         dataset,
         executor,
         {
+            "name": "가중 프로필",
+            "evaluation_scope": "single_turn",
             "metrics": [
                 {
                     "metric_type": "geval_correctness",
+                    "custom_metric_id": "custom-id",
+                    "custom_metric_version": 4,
+                    "required_keys": ["input", "actual_output"],
+                    "custom_metric_prompt": "<script>alert(2)</script>{{input}}",
                     "weight_percent": 100,
                 }
-            ]
+            ],
         },
     )
 
@@ -269,6 +275,11 @@ def test_html_report_uses_saved_metric_snapshot_and_escapes_evidence() -> None:
     assert "100%" in report
     assert "82.00점" in report
     assert "필수 조건을 충족했습니다." in report
+    assert "총점 = Σ" in report
+    assert "범위 single_turn" in report
+    assert "custom-id" in report
+    assert "&lt;script&gt;alert(2)&lt;/script&gt;{{input}}" in report
+    assert "<script>alert(2)</script>" not in report
     assert "<script>alert(1)</script>" not in report
     assert "<img src=x onerror=alert(1)>" not in report
     assert "&lt;img src=x onerror=alert(1)&gt;" in report

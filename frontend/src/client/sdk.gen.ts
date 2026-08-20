@@ -5,6 +5,15 @@ import { OpenAPI } from "./core/OpenAPI"
 import { request as __request } from "./core/request"
 import type {
   EvaluationsReadIntegrationsResponse,
+  EvaluationsReadCustomMetricPlaceholderContractsResponse,
+  EvaluationsReadCustomMetricsData,
+  EvaluationsReadCustomMetricsResponse,
+  EvaluationsCreateCustomMetricData,
+  EvaluationsCreateCustomMetricResponse,
+  EvaluationsUpdateCustomMetricData,
+  EvaluationsUpdateCustomMetricResponse,
+  EvaluationsDeleteCustomMetricData,
+  EvaluationsDeleteCustomMetricResponse,
   EvaluationsReadMetricProfilesData,
   EvaluationsReadMetricProfilesResponse,
   EvaluationsCreateMetricProfileData,
@@ -197,11 +206,120 @@ export class EvaluationsService {
   }
 
   /**
+   * Read Custom Metric Placeholder Contracts
+   * @returns CustomMetricPlaceholderContractsPublic Successful Response
+   * @throws ApiError
+   */
+  public static readCustomMetricPlaceholderContracts(): CancelablePromise<EvaluationsReadCustomMetricPlaceholderContractsResponse> {
+    return __request(OpenAPI, {
+      method: "GET",
+      url: "/api/v1/evaluations/custom-metric-placeholder-contracts",
+    })
+  }
+
+  /**
+   * Read Custom Metrics
+   * @param data The data for the request.
+   * @param data.offset
+   * @param data.limit
+   * @param data.evaluationScope
+   * @param data.isActive
+   * @returns CustomMetricsPublic Successful Response
+   * @throws ApiError
+   */
+  public static readCustomMetrics(
+    data: EvaluationsReadCustomMetricsData = {},
+  ): CancelablePromise<EvaluationsReadCustomMetricsResponse> {
+    return __request(OpenAPI, {
+      method: "GET",
+      url: "/api/v1/evaluations/custom-metrics",
+      query: {
+        offset: data.offset,
+        limit: data.limit,
+        evaluation_scope: data.evaluationScope,
+        is_active: data.isActive,
+      },
+      errors: {
+        422: "Validation Error",
+      },
+    })
+  }
+
+  /**
+   * Create Custom Metric
+   * @param data The data for the request.
+   * @param data.requestBody
+   * @returns CustomMetricPublic Successful Response
+   * @throws ApiError
+   */
+  public static createCustomMetric(
+    data: EvaluationsCreateCustomMetricData,
+  ): CancelablePromise<EvaluationsCreateCustomMetricResponse> {
+    return __request(OpenAPI, {
+      method: "POST",
+      url: "/api/v1/evaluations/custom-metrics",
+      body: data.requestBody,
+      mediaType: "application/json",
+      errors: {
+        422: "Validation Error",
+      },
+    })
+  }
+
+  /**
+   * Update Custom Metric
+   * @param data The data for the request.
+   * @param data.metricId
+   * @param data.requestBody
+   * @returns CustomMetricPublic Successful Response
+   * @throws ApiError
+   */
+  public static updateCustomMetric(
+    data: EvaluationsUpdateCustomMetricData,
+  ): CancelablePromise<EvaluationsUpdateCustomMetricResponse> {
+    return __request(OpenAPI, {
+      method: "PUT",
+      url: "/api/v1/evaluations/custom-metrics/{metric_id}",
+      path: {
+        metric_id: data.metricId,
+      },
+      body: data.requestBody,
+      mediaType: "application/json",
+      errors: {
+        422: "Validation Error",
+      },
+    })
+  }
+
+  /**
+   * Delete Custom Metric
+   * @param data The data for the request.
+   * @param data.metricId
+   * @returns Message Successful Response
+   * @throws ApiError
+   */
+  public static deleteCustomMetric(
+    data: EvaluationsDeleteCustomMetricData,
+  ): CancelablePromise<EvaluationsDeleteCustomMetricResponse> {
+    return __request(OpenAPI, {
+      method: "DELETE",
+      url: "/api/v1/evaluations/custom-metrics/{metric_id}",
+      path: {
+        metric_id: data.metricId,
+      },
+      errors: {
+        422: "Validation Error",
+      },
+    })
+  }
+
+  /**
    * Read Metric Profiles
    * @param data The data for the request.
    * @param data.offset
    * @param data.limit
    * @param data.evaluationMode
+   * @param data.evaluationScope
    * @returns EvaluationMetricProfilesPublic Successful Response
    * @throws ApiError
    */
@@ -215,6 +333,7 @@ export class EvaluationsService {
         offset: data.offset,
         limit: data.limit,
         evaluation_mode: data.evaluationMode,
+        evaluation_scope: data.evaluationScope,
       },
       errors: {
         422: "Validation Error",

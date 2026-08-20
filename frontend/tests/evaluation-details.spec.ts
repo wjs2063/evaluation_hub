@@ -368,7 +368,9 @@ test("live test paginates saved results by 10", async ({ page }) => {
   await mockEvaluationApi(page, 21)
   await page.goto("/evaluation-single-turn/live-test")
 
-  await expect(page.getByText("총 21건 · 1/2 페이지")).toBeVisible()
+  await expect(page.getByText("총 21건 · 1/3 페이지")).toBeVisible()
   await page.getByRole("button", { name: "다음" }).click()
-  await expect(page.getByText("총 21건 · 2/2 페이지")).toBeVisible()
+  await expect(page.getByText("총 21건 · 2/3 페이지")).toBeVisible()
+  await page.getByRole("button", { name: "다음" }).click()
+  await expect(page.getByText("총 21건 · 3/3 페이지")).toBeVisible()
 })

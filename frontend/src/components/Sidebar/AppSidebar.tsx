@@ -55,6 +55,7 @@ const baseItems: Item[] = [
     ],
   },
   { title: "Scheduling", path: "/scheduling", section: "Evaluate" },
+  { title: "Metrics", path: "/metrics", section: "Manage" },
   { title: "Items", path: "/items", section: "Manage" },
 ]
 

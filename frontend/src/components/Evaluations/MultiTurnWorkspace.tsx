@@ -238,10 +238,14 @@ export function MultiTurnWorkspace() {
     try {
       const { data } = await api.get<{ data: MetricProfile[] }>(
         "/api/v1/evaluations/metric-profiles",
-        { params: { evaluation_mode: "multi_turn", limit: 200 } },
+        { params: { evaluation_scope: "multi_turn", limit: 200 } },
       )
-      setMetricProfiles(data.data)
-      setRunMetricProfileId((value) => value || data.data[0]?.id || "")
+      const active = data.data.filter(
+        (profile: MetricProfile & { is_active?: boolean }) =>
+          profile.is_active !== false,
+      )
+      setMetricProfiles(active)
+      setRunMetricProfileId((value) => value || active[0]?.id || "")
     } catch {
       setProfileLoadError("멀티턴 프로필을 불러오지 못했습니다.")
     }

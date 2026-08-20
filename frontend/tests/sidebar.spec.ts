@@ -27,13 +27,16 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/evaluations/multi-turn/datasets**", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
-  await page.route("**/api/v1/evaluations/endpoints", (route) =>
+  await page.route("**/api/v1/evaluations/endpoints**", (route) =>
     route.fulfill({ json: { data: [] } }),
   )
-  await page.route("**/api/v1/evaluations/metric-profiles", (route) =>
+  await page.route("**/api/v1/evaluations/metric-profiles**", (route) =>
     route.fulfill({ json: { data: [], count: 0 } }),
   )
-  await page.route("**/api/v1/evaluations/metric-catalog", (route) =>
+  await page.route("**/api/v1/evaluations/metric-catalog**", (route) =>
+    route.fulfill({ json: { data: [], count: 0 } }),
+  )
+  await page.route("**/api/v1/evaluations/custom-metrics**", (route) =>
     route.fulfill({ json: { data: [], count: 0 } }),
   )
   await page.route("**/api/v1/evaluations/schedules**", (route) =>
@@ -63,6 +66,7 @@ test("sidebar uses English labels and simple page indicators", async ({
     sidebar.getByText("Regression Test", { exact: true }),
   ).toHaveCount(2)
   await expect(sidebar.getByText("Scheduling", { exact: true })).toBeVisible()
+  await expect(sidebar.getByText("Metrics", { exact: true })).toBeVisible()
   await expect(
     sidebar.getByText("Results & Reports", { exact: true }),
   ).toBeVisible()
@@ -82,7 +86,7 @@ test("sidebar uses English labels and simple page indicators", async ({
   expect(borderRadii.every((radius) => radius >= 4 && radius <= 8)).toBe(true)
 
   const contentButtons = sidebar.locator('[data-sidebar="content"] a')
-  await expect(contentButtons).toHaveCount(12)
+  await expect(contentButtons).toHaveCount(13)
   await expect(contentButtons.locator("svg")).toHaveCount(0)
   await expect(
     sidebar.locator('[data-sidebar="menu-button"][data-active="true"]'),
@@ -101,12 +105,12 @@ test("sidebar links to independent scheduling and result reports", async ({
       .filter({ hasText: label })
       .first()
 
-  await sidebar.getByText("Scheduling", { exact: true }).click()
+  await buttonFor("Scheduling").click()
   await expect(page).toHaveURL(/\/scheduling$/)
   await expect(page.getByRole("heading", { name: "스케줄링" })).toBeVisible()
   await expect(buttonFor("Scheduling")).toHaveAttribute("data-active", "true")
 
-  await sidebar.getByText("Results & Reports", { exact: true }).click()
+  await buttonFor("Results & Reports").click()
   await expect(page).toHaveURL(/\/evaluation-single-turn\/live-test#results$/)
   await expect(page.locator("#results")).toBeInViewport()
   await expect(buttonFor("Results & Reports")).toHaveAttribute(
@@ -212,6 +216,7 @@ test("primary console routes render without layout errors", async ({
     "/items",
     "/admin",
     "/settings",
+    "/metrics",
     "/evaluations",
     "/evaluation-single-turn/live-test",
     "/evaluation-single-turn/regression",

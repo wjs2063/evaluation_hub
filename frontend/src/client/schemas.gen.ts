@@ -61,6 +61,18 @@ export const Body_evaluations_run_evaluationSchema = {
       title: "Threshold",
       default: 70,
     },
+    metric_profile_id: {
+      anyOf: [
+        {
+          type: "string",
+          format: "uuid",
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Metric Profile Id",
+    },
   },
   type: "object",
   required: ["file"],
@@ -140,6 +152,266 @@ export const BulkDeleteRequestSchema = {
   type: "object",
   required: ["ids"],
   title: "BulkDeleteRequest",
+} as const
+
+export const CustomMetricCreateSchema = {
+  properties: {
+    name: {
+      type: "string",
+      maxLength: 255,
+      minLength: 1,
+      title: "Name",
+    },
+    description: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 500,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Description",
+    },
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
+    },
+    prompt: {
+      type: "string",
+      maxLength: 8000,
+      minLength: 10,
+      title: "Prompt",
+    },
+    is_active: {
+      type: "boolean",
+      title: "Is Active",
+      default: true,
+    },
+  },
+  type: "object",
+  required: ["name", "evaluation_scope", "prompt"],
+  title: "CustomMetricCreate",
+} as const
+
+export const CustomMetricPlaceholderContractSchema = {
+  properties: {
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
+    },
+    syntax: {
+      type: "string",
+      const: "double_curly_lower_snake_case",
+      title: "Syntax",
+      default: "double_curly_lower_snake_case",
+    },
+    requires_at_least_one: {
+      type: "boolean",
+      title: "Requires At Least One",
+      default: true,
+    },
+    allowed_keys: {
+      items: {
+        type: "string",
+      },
+      type: "array",
+      title: "Allowed Keys",
+    },
+  },
+  type: "object",
+  required: ["evaluation_scope", "allowed_keys"],
+  title: "CustomMetricPlaceholderContract",
+} as const
+
+export const CustomMetricPlaceholderContractsPublicSchema = {
+  properties: {
+    data: {
+      items: {
+        $ref: "#/components/schemas/CustomMetricPlaceholderContract",
+      },
+      type: "array",
+      title: "Data",
+    },
+    count: {
+      type: "integer",
+      title: "Count",
+    },
+  },
+  type: "object",
+  required: ["data", "count"],
+  title: "CustomMetricPlaceholderContractsPublic",
+} as const
+
+export const CustomMetricPublicSchema = {
+  properties: {
+    name: {
+      type: "string",
+      maxLength: 255,
+      minLength: 1,
+      title: "Name",
+    },
+    description: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 500,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Description",
+    },
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
+    },
+    prompt: {
+      type: "string",
+      maxLength: 8000,
+      minLength: 10,
+      title: "Prompt",
+    },
+    is_active: {
+      type: "boolean",
+      title: "Is Active",
+      default: true,
+    },
+    id: {
+      type: "string",
+      format: "uuid",
+      title: "Id",
+    },
+    version: {
+      type: "integer",
+      title: "Version",
+    },
+    required_keys: {
+      items: {
+        type: "string",
+      },
+      type: "array",
+      title: "Required Keys",
+    },
+    created_by_id: {
+      anyOf: [
+        {
+          type: "string",
+          format: "uuid",
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Created By Id",
+    },
+    updated_by_id: {
+      anyOf: [
+        {
+          type: "string",
+          format: "uuid",
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Updated By Id",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+      title: "Created At",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+      title: "Updated At",
+    },
+  },
+  type: "object",
+  required: [
+    "name",
+    "evaluation_scope",
+    "prompt",
+    "id",
+    "version",
+    "required_keys",
+    "created_by_id",
+    "updated_by_id",
+    "created_at",
+    "updated_at",
+  ],
+  title: "CustomMetricPublic",
+} as const
+
+export const CustomMetricUpdateSchema = {
+  properties: {
+    name: {
+      type: "string",
+      maxLength: 255,
+      minLength: 1,
+      title: "Name",
+    },
+    description: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 500,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Description",
+    },
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
+    },
+    prompt: {
+      type: "string",
+      maxLength: 8000,
+      minLength: 10,
+      title: "Prompt",
+    },
+    is_active: {
+      type: "boolean",
+      title: "Is Active",
+      default: true,
+    },
+    expected_version: {
+      anyOf: [
+        {
+          type: "integer",
+          minimum: 1,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Expected Version",
+    },
+  },
+  type: "object",
+  required: ["name", "evaluation_scope", "prompt"],
+  title: "CustomMetricUpdate",
+} as const
+
+export const CustomMetricsPublicSchema = {
+  properties: {
+    data: {
+      items: {
+        $ref: "#/components/schemas/CustomMetricPublic",
+      },
+      type: "array",
+      title: "Data",
+    },
+    count: {
+      type: "integer",
+      title: "Count",
+    },
+  },
+  type: "object",
+  required: ["data", "count"],
+  title: "CustomMetricsPublic",
 } as const
 
 export const EvaluationComparisonCreateSchema = {
@@ -1484,7 +1756,26 @@ export const EvaluationMetricCatalogPublicSchema = {
 export const EvaluationMetricDefinitionCreateSchema = {
   properties: {
     metric_type: {
-      $ref: "#/components/schemas/EvaluationMetricType",
+      anyOf: [
+        {
+          $ref: "#/components/schemas/EvaluationMetricType",
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
+    custom_metric_id: {
+      anyOf: [
+        {
+          type: "string",
+          format: "uuid",
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Id",
     },
     weight_percent: {
       type: "integer",
@@ -1509,16 +1800,78 @@ export const EvaluationMetricDefinitionCreateSchema = {
       ],
       title: "Custom Instruction",
     },
+    custom_metric_name: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 255,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Name",
+    },
+    custom_metric_version: {
+      anyOf: [
+        {
+          type: "integer",
+          minimum: 1,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Version",
+    },
+    custom_metric_prompt: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 8000,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Prompt",
+    },
+    required_keys: {
+      items: {
+        type: "string",
+      },
+      type: "array",
+      title: "Required Keys",
+    },
   },
   type: "object",
-  required: ["metric_type", "weight_percent"],
+  required: ["weight_percent"],
   title: "EvaluationMetricDefinitionCreate",
 } as const
 
 export const EvaluationMetricDefinitionPublicSchema = {
   properties: {
     metric_type: {
-      $ref: "#/components/schemas/EvaluationMetricType",
+      anyOf: [
+        {
+          $ref: "#/components/schemas/EvaluationMetricType",
+        },
+        {
+          type: "null",
+        },
+      ],
+    },
+    custom_metric_id: {
+      anyOf: [
+        {
+          type: "string",
+          format: "uuid",
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Id",
     },
     weight_percent: {
       type: "integer",
@@ -1542,6 +1895,49 @@ export const EvaluationMetricDefinitionPublicSchema = {
         },
       ],
       title: "Custom Instruction",
+    },
+    custom_metric_name: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 255,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Name",
+    },
+    custom_metric_version: {
+      anyOf: [
+        {
+          type: "integer",
+          minimum: 1,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Version",
+    },
+    custom_metric_prompt: {
+      anyOf: [
+        {
+          type: "string",
+          maxLength: 8000,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Custom Metric Prompt",
+    },
+    required_keys: {
+      items: {
+        type: "string",
+      },
+      type: "array",
+      title: "Required Keys",
     },
     id: {
       type: "string",
@@ -1596,7 +1992,6 @@ export const EvaluationMetricDefinitionPublicSchema = {
   },
   type: "object",
   required: [
-    "metric_type",
     "weight_percent",
     "id",
     "position",
@@ -1642,6 +2037,10 @@ export const EvaluationMetricProfileCreateSchema = {
       $ref: "#/components/schemas/EvaluationMode",
       default: "single_turn",
     },
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
+      default: "single_turn",
+    },
     metrics: {
       items: {
         $ref: "#/components/schemas/EvaluationMetricDefinitionCreate",
@@ -1684,6 +2083,10 @@ export const EvaluationMetricProfilePublicSchema = {
     },
     evaluation_mode: {
       $ref: "#/components/schemas/EvaluationMode",
+      default: "single_turn",
+    },
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
       default: "single_turn",
     },
     id: {
@@ -1747,6 +2150,10 @@ export const EvaluationMetricProfileUpdateSchema = {
       $ref: "#/components/schemas/EvaluationMode",
       default: "single_turn",
     },
+    evaluation_scope: {
+      $ref: "#/components/schemas/EvaluationScope",
+      default: "single_turn",
+    },
     metrics: {
       items: {
         $ref: "#/components/schemas/EvaluationMetricDefinitionCreate",
@@ -1755,6 +2162,18 @@ export const EvaluationMetricProfileUpdateSchema = {
       maxItems: 16,
       minItems: 1,
       title: "Metrics",
+    },
+    expected_version: {
+      anyOf: [
+        {
+          type: "integer",
+          minimum: 1,
+        },
+        {
+          type: "null",
+        },
+      ],
+      title: "Expected Version",
     },
   },
   type: "object",
@@ -2737,6 +3156,12 @@ export const EvaluationSchedulesPublicSchema = {
   type: "object",
   required: ["data", "count"],
   title: "EvaluationSchedulesPublic",
+} as const
+
+export const EvaluationScopeSchema = {
+  type: "string",
+  enum: ["quick_upload", "single_turn", "multi_turn"],
+  title: "EvaluationScope",
 } as const
 
 export const EvaluationSummarySchema = {

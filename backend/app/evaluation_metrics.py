@@ -6,6 +6,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
+from app.custom_metrics import ensure_required_values, parse_custom_metric_prompt
 from app.models import (
     EvaluationMetricDefinitionCreate,
     EvaluationMetricType,
@@ -474,40 +475,98 @@ async def evaluate_selected_metrics(
         actual_output=actual_output,
         expected_output=expected_output,
     )
-    instances = [
-        _build_metric(
-            definition.metric_type,
-            model_name,
-            definition.config,
-            definition.custom_instruction,
-        )
-        for definition in metrics
-    ]
+    from deepeval.metrics import GEval
+    from deepeval.test_case import SingleTurnParams
+
+    param_by_key = {
+        "input": SingleTurnParams.INPUT,
+        "actual_output": SingleTurnParams.ACTUAL_OUTPUT,
+        "expected_output": SingleTurnParams.EXPECTED_OUTPUT,
+    }
+    instances: list[Any | None] = []
     outcomes: list[object] = []
-    for instance in instances:
+    for definition in metrics:
+        instance: Any | None = None
         try:
-            outcomes.append(await instance.a_measure(test_case))
+            if definition.custom_metric_id is not None:
+                if not definition.custom_metric_prompt:
+                    raise ValueError("Custom metric prompt snapshot is missing")
+                parsed_keys = list(
+                    parse_custom_metric_prompt(
+                        definition.custom_metric_prompt, "single_turn"
+                    )
+                )
+                if parsed_keys != definition.required_keys:
+                    raise ValueError(
+                        "Custom metric required_keys snapshot does not match its prompt"
+                    )
+                ensure_required_values(
+                    definition.required_keys,
+                    {
+                        "input": input_text,
+                        "actual_output": actual_output,
+                        "expected_output": expected_output,
+                    },
+                )
+                instance = GEval(
+                    name=definition.custom_metric_name or "Custom metric",
+                    criteria=definition.custom_metric_prompt,
+                    evaluation_params=[
+                        param_by_key[key] for key in definition.required_keys
+                    ],
+                    model=model_name,
+                    threshold=None,
+                )
+            else:
+                if definition.metric_type is None:
+                    raise ValueError("Built-in metric type is missing")
+                instance = _build_metric(
+                    definition.metric_type,
+                    model_name,
+                    definition.config,
+                    definition.custom_instruction,
+                )
+            outcome: object = await instance.a_measure(test_case)
         except Exception as exc:
-            outcomes.append(exc)
+            outcome = exc
+        instances.append(instance)
+        outcomes.append(outcome)
     results: list[MetricEvaluationResult] = []
     for definition, instance, outcome in zip(metrics, instances, outcomes, strict=True):
-        catalog = catalog_definition(definition.metric_type)
+        catalog = (
+            catalog_definition(definition.metric_type)
+            if definition.metric_type is not None
+            else None
+        )
+        name = (
+            definition.metric_type.value
+            if definition.metric_type is not None
+            else f"custom:{definition.custom_metric_id}"
+        )
+        display_name = (
+            catalog.display_name
+            if catalog is not None
+            else definition.custom_metric_name or "사용자 정의 메트릭"
+        )
+        score_direction = catalog.score_direction if catalog else "higher_is_better"
         if isinstance(outcome, BaseException):
             results.append(
                 MetricEvaluationResult(
-                    name=definition.metric_type.value,
-                    display_name=catalog.display_name,
+                    name=name,
+                    display_name=display_name,
                     score=0,
                     raw_score_ratio=None,
-                    score_direction=catalog.score_direction,
+                    score_direction=score_direction,
                     weight_percent=definition.weight_percent,
                     weighted_score=0,
                     error=str(outcome)[:1000],
                 )
             )
             continue
+        if instance is None:
+            raise RuntimeError("Metric instance was not constructed")
         raw_score = round(float(instance.score), 6)
-        normalized_score = quality_score(raw_score, catalog.score_direction)
+        normalized_score = quality_score(raw_score, score_direction)
         reason = getattr(instance, "reason", None)
         if not reason and definition.metric_type == EvaluationMetricType.EXACT_MATCH:
             reason = (
@@ -517,11 +576,11 @@ async def evaluate_selected_metrics(
             )
         results.append(
             MetricEvaluationResult(
-                name=definition.metric_type.value,
-                display_name=catalog.display_name,
+                name=name,
+                display_name=display_name,
                 score=normalized_score,
                 raw_score_ratio=raw_score,
-                score_direction=catalog.score_direction,
+                score_direction=score_direction,
                 weight_percent=definition.weight_percent,
                 weighted_score=contribution_score(
                     normalized_score, definition.weight_percent
@@ -538,14 +597,16 @@ async def evaluate_conversation_metrics(
     *,
     turns: list[tuple[str, str]],
     model_name: str,
+    expected_outcome: str | None = None,
 ) -> list[MetricEvaluationResult]:
     from deepeval.metrics import (
+        ConversationalGEval,
         ConversationCompletenessMetric,
         KnowledgeRetentionMetric,
         RoleAdherenceMetric,
         TurnRelevancyMetric,
     )
-    from deepeval.test_case import ConversationalTestCase, Turn
+    from deepeval.test_case import ConversationalTestCase, MultiTurnParams, Turn
 
     definitions = {
         EvaluationMetricType.TURN_RELEVANCY: TurnRelevancyMetric,
@@ -559,6 +620,79 @@ async def evaluate_conversation_metrics(
     ]
     results: list[MetricEvaluationResult] = []
     for definition in metrics:
+        if definition.custom_metric_id is not None:
+            name = f"custom:{definition.custom_metric_id}"
+            display_name = definition.custom_metric_name or "사용자 정의 메트릭"
+            try:
+                if not definition.custom_metric_prompt:
+                    raise ValueError("Custom metric prompt snapshot is missing")
+                parsed_keys = list(
+                    parse_custom_metric_prompt(
+                        definition.custom_metric_prompt, "multi_turn"
+                    )
+                )
+                if parsed_keys != definition.required_keys:
+                    raise ValueError(
+                        "Custom metric required_keys snapshot does not match its prompt"
+                    )
+                ensure_required_values(
+                    definition.required_keys,
+                    {
+                        "role": "user, assistant" if test_turns else "",
+                        "content": "\n".join(turn.content for turn in test_turns),
+                        "expected_outcome": expected_outcome,
+                    },
+                )
+                param_by_key = {
+                    "role": MultiTurnParams.ROLE,
+                    "content": MultiTurnParams.CONTENT,
+                    "expected_outcome": MultiTurnParams.EXPECTED_OUTCOME,
+                }
+                test_case = ConversationalTestCase(
+                    turns=test_turns, expected_outcome=expected_outcome
+                )
+                metric = ConversationalGEval(
+                    name=display_name,
+                    criteria=definition.custom_metric_prompt,
+                    evaluation_params=[
+                        param_by_key[key] for key in definition.required_keys
+                    ],
+                    model=model_name,
+                    threshold=None,
+                )
+                await metric.a_measure(test_case)
+                raw_ratio = round(float(metric.score or 0), 6)
+                score = quality_score(raw_ratio, "higher_is_better")
+                results.append(
+                    MetricEvaluationResult(
+                        name=name,
+                        display_name=display_name,
+                        score=score,
+                        raw_score_ratio=raw_ratio,
+                        score_direction="higher_is_better",
+                        weight_percent=definition.weight_percent,
+                        weighted_score=contribution_score(
+                            score, definition.weight_percent
+                        ),
+                        reason=getattr(metric, "reason", None),
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    MetricEvaluationResult(
+                        name=name,
+                        display_name=display_name,
+                        score=0,
+                        raw_score_ratio=None,
+                        score_direction="higher_is_better",
+                        weight_percent=definition.weight_percent,
+                        weighted_score=0,
+                        error=str(exc)[:1000],
+                    )
+                )
+            continue
+        if definition.metric_type is None:
+            raise ValueError("Built-in metric type is missing")
         metric_class = definitions.get(definition.metric_type)
         if metric_class is None:
             raise ValueError(
