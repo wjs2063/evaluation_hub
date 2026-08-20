@@ -13,6 +13,7 @@ import {
 import { type ChangeEvent, useCallback, useEffect, useState } from "react"
 
 import { PageHeader } from "@/components/Common/PageHeader"
+import { ComparisonPanel } from "@/components/Evaluations/ComparisonPanel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -32,6 +33,7 @@ type Endpoint = {
   base_url: string
   is_active: boolean
 }
+type MetricProfile = { id: string; name: string }
 type Scenario = {
   id: string
   name: string
@@ -100,7 +102,7 @@ type ScenarioRun = {
   }[]
 }
 
-const RUNS_PER_PAGE = 20
+const RUNS_PER_PAGE = 10
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
 api.interceptors.request.use((config) => {
@@ -112,7 +114,7 @@ const initialScenario = (endpointId = "", url = "") => ({
   name: "새 멀티턴 시나리오",
   description: "",
   endpoint_id: endpointId,
-  threshold: 0.7,
+  threshold: 70,
   evaluator: "deepeval",
   turns: [
     {
@@ -139,7 +141,7 @@ const sampleDocument = (endpointId = "", url = "") => ({
   description: "이전 답변의 정보를 후속 turn에서 유지하는지 평가합니다.",
   test_type: "multi_turn",
   endpoint_id: endpointId || "00000000-0000-0000-0000-000000000000",
-  threshold: 0.7,
+  threshold: 70,
   evaluator: "deepeval",
   cases: [
     {
@@ -180,7 +182,7 @@ const initialDraft = (endpointId = "", url = ""): ScenarioDraft => ({
   name: "새 멀티턴 시나리오",
   description: "",
   endpoint_id: endpointId,
-  threshold: 0.7,
+  threshold: 70,
   evaluator: "deepeval",
   turns: [newTurn(url)],
 })
@@ -189,6 +191,8 @@ export function MultiTurnWorkspace() {
   const { user } = useAuth()
   const [endpoints, setEndpoints] = useState<Endpoint[]>([])
   const [scenarios, setScenarios] = useState<Scenario[]>([])
+  const [metricProfiles, setMetricProfiles] = useState<MetricProfile[]>([])
+  const [runMetricProfileId, setRunMetricProfileId] = useState("")
   const [selectedId, setSelectedId] = useState("")
   const [source, setSource] = useState(
     JSON.stringify(initialScenario(), null, 2),
@@ -197,6 +201,7 @@ export function MultiTurnWorkspace() {
   const [runCount, setRunCount] = useState(0)
   const [runPage, setRunPage] = useState(0)
   const [error, setError] = useState("")
+  const [profileLoadError, setProfileLoadError] = useState("")
   const [busy, setBusy] = useState(false)
   const [endpointsLoaded, setEndpointsLoaded] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -206,7 +211,9 @@ export function MultiTurnWorkspace() {
 
   const load = useCallback(async (initializeSource = false) => {
     const [endpointResult, scenarioResult] = await Promise.all([
-      api.get<{ data: Endpoint[] }>("/api/v1/evaluations/endpoints"),
+      api.get<{ data: Endpoint[] }>("/api/v1/evaluations/endpoints", {
+        params: { limit: 200 },
+      }),
       api.get<{ data: Scenario[] }>("/api/v1/evaluations/multi-turn/datasets"),
     ])
     const activeEndpoints = endpointResult.data.data.filter(
@@ -223,6 +230,20 @@ export function MultiTurnWorkspace() {
           2,
         ),
       )
+    }
+  }, [])
+
+  const loadMetricProfiles = useCallback(async () => {
+    setProfileLoadError("")
+    try {
+      const { data } = await api.get<{ data: MetricProfile[] }>(
+        "/api/v1/evaluations/metric-profiles",
+        { params: { evaluation_mode: "multi_turn", limit: 200 } },
+      )
+      setMetricProfiles(data.data)
+      setRunMetricProfileId((value) => value || data.data[0]?.id || "")
+    } catch {
+      setProfileLoadError("멀티턴 프로필을 불러오지 못했습니다.")
     }
   }, [])
 
@@ -285,7 +306,8 @@ export function MultiTurnWorkspace() {
 
   useEffect(() => {
     load(true).catch(() => setError("멀티턴 시나리오를 불러오지 못했습니다."))
-  }, [load])
+    void loadMetricProfiles()
+  }, [load, loadMetricProfiles])
 
   const validateScenario = (scenario: unknown): string | null => {
     if (!scenario || typeof scenario !== "object")
@@ -474,10 +496,14 @@ export function MultiTurnWorkspace() {
 
   const run = async () => {
     if (!selectedId) return setError("먼저 시나리오를 저장해 주세요.")
+    if (!runMetricProfileId)
+      return setError("멀티턴 메트릭 프로필을 선택해 주세요.")
     try {
       setBusy(true)
       const { data } = await api.post<ScenarioRun>(
         `/api/v1/evaluations/multi-turn/datasets/${selectedId}/run`,
+        null,
+        { params: { metric_profile_id: runMetricProfileId } },
       )
       setRunPage(0)
       await loadRuns(selectedId, 0)
@@ -550,6 +576,24 @@ export function MultiTurnWorkspace() {
     }
   }
 
+  const downloadRunReport = async (runId: string) => {
+    if (!selectedId) return
+    try {
+      const { data } = await api.get<Blob>(
+        `/api/v1/evaluations/multi-turn/datasets/${selectedId}/runs/${runId}/report.html`,
+        { responseType: "blob" },
+      )
+      const url = URL.createObjectURL(data)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `multi-turn-report-${runId}.html`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError("멀티턴 HTML 결과지를 다운로드하지 못했습니다.")
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -557,6 +601,7 @@ export function MultiTurnWorkspace() {
         title="멀티턴 라이브 API 테스트"
         description="각 turn의 URL·JSON 본문·응답 경로를 선언하고, POST 요청으로 이전 응답을 다음 요청에 안전하게 연결합니다."
       />
+      <ComparisonPanel evaluationMode="multi_turn" targetId={selectedId} />
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-4xl">
           <DialogHeader>
@@ -621,13 +666,13 @@ export function MultiTurnWorkspace() {
                 />
               </label>
               <label htmlFor="scenario-threshold" className="space-y-1 text-sm">
-                <span>평가 기준 점수 (0~1)</span>
+                <span>평가 기준 점수 (0~100)</span>
                 <Input
                   id="scenario-threshold"
                   type="number"
                   min="0"
-                  max="1"
-                  step="0.05"
+                  max="100"
+                  step="0.001"
                   value={draft.threshold}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -879,8 +924,8 @@ export function MultiTurnWorkspace() {
                   실행별 <code>thread_id</code>는 자동 추가됩니다.{" "}
                   <code>{"{{conversation_history}}"}</code>는 이전
                   user/assistant 대화 배열, <code>{"{{previous_output}}"}</code>
-                  은 직전 응답입니다. DeepEval은 턴별 정확성과 전체 대화 흐름을
-                  종합해 판정합니다. 업로드 파일은{" "}
+                  은 직전 응답입니다. DeepEval은 선택한 멀티턴 프로필의 네 지표
+                  가중합으로 판정합니다. 업로드 파일은{" "}
                   <code>test_type: "multi_turn"</code>과 각 case의 request
                   headers/body, expected_output을 포함해야 합니다.
                 </p>
@@ -939,12 +984,50 @@ export function MultiTurnWorkspace() {
                   보관됩니다.
                 </p>
               </div>
-              <Button
-                onClick={run}
-                disabled={!selectedId || busy || !hasEndpoints}
-              >
-                <Play /> {busy ? "실행 중…" : "시나리오 실행"}
-              </Button>
+              <div className="flex items-end gap-2">
+                <label className="space-y-1 text-xs">
+                  <span>멀티턴 메트릭 프로필</span>
+                  <select
+                    className="block h-9 rounded-md border bg-background px-2"
+                    value={runMetricProfileId}
+                    onChange={(event) =>
+                      setRunMetricProfileId(event.target.value)
+                    }
+                  >
+                    <option value="">선택</option>
+                    {metricProfiles.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.name}
+                      </option>
+                    ))}
+                  </select>
+                  {profileLoadError ? (
+                    <span className="mt-1 flex items-center gap-2 text-destructive">
+                      {profileLoadError}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void loadMetricProfiles()}
+                      >
+                        다시 시도
+                      </Button>
+                    </span>
+                  ) : metricProfiles.length === 0 ? (
+                    <span className="mt-1 block text-muted-foreground">
+                      활성 멀티턴 프로필이 없습니다.
+                    </span>
+                  ) : null}
+                </label>
+                <Button
+                  onClick={run}
+                  disabled={
+                    !selectedId || busy || !hasEndpoints || !runMetricProfileId
+                  }
+                >
+                  <Play /> {busy ? "실행 중…" : "시나리오 실행"}
+                </Button>
+              </div>
             </div>
             <div className="mt-4 space-y-3">
               {runs.map((run) => (
@@ -969,19 +1052,28 @@ export function MultiTurnWorkspace() {
                         최종 {run.overall_passed ? "통과" : "실패"}
                       </Badge>
                       <Badge variant="outline">
-                        종합 {(run.overall_score * 100).toFixed(2)}점
+                        종합 {run.overall_score.toFixed(3)}점
                       </Badge>
                       <Badge variant="outline">
-                        턴 평균 {(run.turn_average_score * 100).toFixed(2)}점
+                        턴 평균 {run.turn_average_score.toFixed(3)}점
                       </Badge>
                       {run.conversation_score !== null && (
                         <Badge variant="outline">
-                          대화 흐름 {(run.conversation_score * 100).toFixed(2)}
-                          점
+                          대화 흐름 {run.conversation_score.toFixed(3)}점
                         </Badge>
                       )}
                     </span>
                   </button>
+                  <div className="flex justify-end border-b px-3 py-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void downloadRunReport(run.id)}
+                    >
+                      <Download /> HTML 결과지
+                    </Button>
+                  </div>
                   {!run.turns && (
                     <p className="p-3 text-xs text-muted-foreground">
                       클릭하여 턴별 요청·응답과 평가 사유를 확인하세요.
@@ -1030,7 +1122,7 @@ export function MultiTurnWorkspace() {
                           className="mt-2"
                           variant={turn.passed ? "secondary" : "destructive"}
                         >
-                          {(turn.score * 100).toFixed(2)}점
+                          {turn.score.toFixed(3)}점
                         </Badge>
                         {turn.reason && (
                           <p className="mt-2 text-muted-foreground">

@@ -31,10 +31,12 @@ Do not silently fall back from a selected external evaluator to `local`; that ch
 
 ## Scoring rules
 
-- Keep scores normalized to the existing 0–1 contract.
+- Normalize product quality scores and thresholds to 0–100. Keep raw evaluator ratios at 0–1 only as audit evidence.
+- Calculate each metric contribution as `quality_score * weight_percent / 100`, sum unrounded contributions, and apply decimal `ROUND_HALF_UP` at three places.
 - Derive row or turn pass/fail from `score >= threshold`.
-- Preserve metric name, score, and reason where available.
-- Preserve current multi-turn weighting unless a product change explicitly replaces it: turn average 40%, conversation score 60%.
+- Preserve metric name, quality score, raw ratio, weight, contribution, Korean reason, and error where available.
+- New multi-turn runs use the selected profile's supported metric weights totaling exactly 100. Do not use the legacy turn-average 40% plus conversational score 60% blend.
+- Pass rate and Arena win rate remain ratios; they are not quality scores.
 - Compare baselines without mutating the baseline run. Mark missing baseline rows or turns explicitly.
 - Keep aggregate counts consistent: `total = passed + failed` for completed evidence.
 

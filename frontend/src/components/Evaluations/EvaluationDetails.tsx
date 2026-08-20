@@ -6,7 +6,7 @@ export type EvaluationMetric = {
   score: number
   weight_percent?: number | null
   weighted_score?: number | null
-  raw_score?: number | null
+  raw_score_ratio?: number | null
   score_direction?: string | null
   reason: string | null
   error?: string | null
@@ -26,7 +26,7 @@ const metricNames: Record<string, string> = {
   deepeval_geval: "자연어 응답 정확성",
 }
 
-const formatScore = (score: number) => `${(score * 100).toFixed(2)}점`
+const formatScore = (score: number) => `${score.toFixed(3)}점`
 
 export function EvaluationDetails({
   score,
@@ -65,11 +65,11 @@ export function EvaluationDetails({
                   ` · 최종 기여 ${formatScore(metric.weighted_score)}`}
               </p>
             )}
-            {metric.raw_score != null &&
+            {metric.raw_score_ratio != null &&
               metric.score_direction === "lower_is_better" && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  DeepEval 원점수 {formatScore(metric.raw_score)} · 낮을수록
-                  좋음 · 합산용 품질점수 {formatScore(metric.score)}
+                  DeepEval 원점수 {formatScore(metric.raw_score_ratio * 100)} ·
+                  낮을수록 좋음 · 합산용 품질점수 {formatScore(metric.score)}
                 </p>
               )}
             <p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">

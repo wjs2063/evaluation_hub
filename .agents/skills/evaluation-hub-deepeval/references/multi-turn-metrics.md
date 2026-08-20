@@ -24,3 +24,7 @@ Use these official 4.1.x documents as the authority, then verify the installed A
 - Pass `available_tools` to `ToolUseMetric` and `relevant_topics` to `TopicAdherenceMetric`; do not invent test-case fields with those names.
 - Preserve tool names and arguments in `ToolCall` objects. Do not flatten them into prose.
 - Reject a metric configuration when required evidence is absent. Do not manufacture empty contexts, roles, outcomes, tools, or topics to make construction succeed.
+
+## EvaluationHub active catalog
+
+Only Turn Relevancy, Role Adherence, Knowledge Retention, and Conversation Completeness are active for this product scope. Role Adherence requires a non-empty profile `chatbot_role`. Their 0-100 normalized quality scores are combined using the selected profile's integer weights totaling exactly 100; the legacy turn-average 40% plus conversational G-Eval 60% formula is not used for new runs.

@@ -11,7 +11,7 @@ const dataset = {
   endpoint_id: "endpoint-1",
   body_template: '{"input":"{{input}}"}',
   response_path: null,
-  threshold: 0.7,
+  threshold: 70,
   evaluator: "deepeval",
   row_count: 1,
   rows: [
@@ -33,7 +33,7 @@ const runSummary = {
   passed: 1,
   failed: 0,
   pass_rate: 1,
-  average_score: 0.825,
+  average_score: 82.5,
   geval_available: true,
   dataset_name: dataset.name,
   dataset_description: "상세 평가 설명",
@@ -50,23 +50,23 @@ const runDetail = {
       expected_output: "기대 응답",
       actual_output: "실제 응답",
       response_status: 200,
-      score: 0.825,
+      score: 82.5,
       passed: true,
       error: null,
       metrics: [
         {
           name: "toxicity",
           display_name: "유해성 안전성",
-          score: 0.825,
-          raw_score: 0.175,
+          score: 82.5,
+          raw_score_ratio: 0.175,
           score_direction: "lower_is_better",
           weight_percent: 70,
-          weighted_score: 0.5775,
+          weighted_score: 57.75,
           reason: "핵심 내용이 일치합니다.\n표현도 자연스럽습니다.",
         },
         {
           name: "custom_metric",
-          score: 0.5,
+          score: 50,
           reason: null,
         },
       ],
@@ -202,7 +202,7 @@ async function mockEvaluationApi(page: Page, savedRunCount = 1) {
       path === `/api/v1/evaluations/single-turn/datasets/${dataset.id}/runs`
     ) {
       if (savedRunCount > 1) {
-        expect(url.searchParams.get("limit")).toBe("20")
+        expect(url.searchParams.get("limit")).toBe("10")
       }
       return route.fulfill({
         json: { data: [runSummary], count: savedRunCount },
@@ -235,12 +235,12 @@ async function mockEvaluationApi(page: Page, savedRunCount = 1) {
 }
 
 async function expectEvaluationDetails(page: Page) {
-  await expect(page.getByText("통과 · 82.50점", { exact: true })).toBeVisible()
+  await expect(page.getByText("통과 · 82.500점", { exact: true })).toBeVisible()
   await expect(page.getByText("유해성 안전성", { exact: true })).toBeVisible()
-  await expect(page.getByText("가중치 70% · 최종 기여 57.75점")).toBeVisible()
+  await expect(page.getByText("가중치 70% · 최종 기여 57.750점")).toBeVisible()
   await expect(
     page.getByText(
-      "DeepEval 원점수 17.50점 · 낮을수록 좋음 · 합산용 품질점수 82.50점",
+      "DeepEval 원점수 17.500점 · 낮을수록 좋음 · 합산용 품질점수 82.500점",
     ),
   ).toBeVisible()
   await expect(page.getByText("custom_metric", { exact: true })).toBeVisible()
@@ -278,7 +278,7 @@ test("live test waits for a queued worker job before loading results", async ({
 
   await page.getByRole("button", { name: "평가 실행" }).click()
 
-  await expect(page.getByText("통과 · 82.50점", { exact: true })).toBeVisible()
+  await expect(page.getByText("통과 · 82.500점", { exact: true })).toBeVisible()
 })
 
 test("independent scheduling page manages schedules through CRUD", async ({
@@ -364,7 +364,7 @@ test("live test downloads the selected-metric HTML report", async ({
   )
 })
 
-test("live test paginates saved results by 20", async ({ page }) => {
+test("live test paginates saved results by 10", async ({ page }) => {
   await mockEvaluationApi(page, 21)
   await page.goto("/evaluation-single-turn/live-test")
 

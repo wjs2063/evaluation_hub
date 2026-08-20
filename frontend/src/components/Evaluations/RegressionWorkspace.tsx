@@ -51,7 +51,7 @@ type EvaluationJob = {
 }
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
-const RUNS_PER_PAGE = 20
+const RUNS_PER_PAGE = 10
 api.interceptors.request.use((config) => {
   config.headers.Authorization = `Bearer ${localStorage.getItem("access_token") ?? ""}`
   return config
@@ -216,7 +216,7 @@ export function RegressionWorkspace() {
               {runs.map((run) => (
                 <option key={run.id} value={run.id}>
                   {new Date(run.created_at).toLocaleString()} · 평균{" "}
-                  {(run.average_score * 100).toFixed(2)}점
+                  {run.average_score.toFixed(3)}점
                 </option>
               ))}
             </select>
@@ -300,7 +300,7 @@ export function RegressionWorkspace() {
                 통과 {selectedRun.passed}/{selectedRun.total}
               </Badge>
               <Badge variant="outline">
-                평균 {(selectedRun.average_score * 100).toFixed(2)}점
+                평균 {selectedRun.average_score.toFixed(3)}점
               </Badge>
             </div>
           </div>
@@ -332,7 +332,7 @@ export function RegressionWorkspace() {
                     >
                       {row.output_changed ? "응답 변경" : "변경 없음"} ·{" "}
                       {row.score_delta && row.score_delta > 0 ? "+" : ""}
-                      {((row.score_delta ?? 0) * 100).toFixed(2)}점
+                      {(row.score_delta ?? 0).toFixed(3)}점
                     </Badge>
                   </div>
                 )}

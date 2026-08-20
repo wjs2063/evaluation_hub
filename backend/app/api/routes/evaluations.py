@@ -10,7 +10,7 @@ import socket
 import uuid
 from difflib import SequenceMatcher
 from typing import Any, Literal, cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -28,11 +28,20 @@ from app.cron_schedule import CronExpressionError, next_cron_run
 from app.evaluation_jobs import enqueue_dataset_job
 from app.evaluation_metrics import (
     METRIC_CATALOG,
+    aggregate_score,
     catalog_definition,
     ensure_korean_reason,
+    evaluate_conversation_metrics,
     evaluate_selected_metrics,
+    round_score,
 )
 from app.models import (
+    BulkDeleteRequest,
+    EvaluationComparison,
+    EvaluationComparisonCreate,
+    EvaluationComparisonMode,
+    EvaluationComparisonPublic,
+    EvaluationComparisonsPublic,
     EvaluationDataset,
     EvaluationDatasetCreate,
     EvaluationDatasetImportResult,
@@ -40,6 +49,7 @@ from app.models import (
     EvaluationDatasetRow,
     EvaluationDatasetRowCreate,
     EvaluationDatasetRowPublic,
+    EvaluationDatasetRowsPublic,
     EvaluationDatasetRowUpdate,
     EvaluationDatasetScheduleCreate,
     EvaluationDatasetsPublic,
@@ -61,6 +71,8 @@ from app.models import (
     EvaluationMetricProfilePublic,
     EvaluationMetricProfilesPublic,
     EvaluationMetricProfileUpdate,
+    EvaluationMetricType,
+    EvaluationMode,
     EvaluationRequestDocument,
     EvaluationRun,
     EvaluationRunMetricResult,
@@ -74,6 +86,7 @@ from app.models import (
     EvaluationScenarioTurn,
     EvaluationScenarioTurnCreate,
     EvaluationScenarioTurnPublic,
+    EvaluationScenarioTurnsPublic,
     EvaluationScenarioUpdate,
     EvaluationSchedule,
     EvaluationScheduleBase,
@@ -84,7 +97,9 @@ from app.models import (
     EvaluationScheduleType,
     EvaluationScheduleUpdate,
     Message,
+    MultiTurnDatasetCaseDocument,
     MultiTurnDatasetDocument,
+    SingleTurnDatasetCaseDocument,
     SingleTurnDatasetDocument,
     User,
     get_datetime_utc,
@@ -98,8 +113,6 @@ MAX_EXECUTION_ROWS = 1_000
 MAX_RESPONSE_BYTES = 1_000_000
 Framework = Literal["local", "deepeval", "langfuse"]
 _run_semaphore = asyncio.Semaphore(settings.EVALUATION_WORKER_CONCURRENCY)
-TURN_SCORE_WEIGHT = 0.4
-CONVERSATION_SCORE_WEIGHT = 0.6
 
 
 class MetricScore(BaseModel):
@@ -108,7 +121,7 @@ class MetricScore(BaseModel):
     display_name: str | None = None
     weight_percent: int | None = None
     weighted_score: float | None = None
-    raw_score: float | None = None
+    raw_score_ratio: float | None = None
     score_direction: str | None = None
     reason: str | None = None
     error: str | None = None
@@ -148,12 +161,13 @@ class IntegrationsResponse(BaseModel):
 
 class SavedRunRow(BaseModel):
     id: uuid.UUID
+    dataset_row_id: uuid.UUID | None
     input: str
     expected_output: str
     actual_output: str
     response_status: int | None
     response_body: str | None
-    score: float
+    score: float | None
     passed: bool
     metrics: list[MetricScore]
     error: str | None
@@ -224,6 +238,9 @@ class ScenarioRunSummary(BaseModel):
     overall_reason: str | None
     average_score: float
     evaluator: str
+    metric_profile_id: uuid.UUID | None = None
+    metric_profile_version: int | None = None
+    metrics: list[MetricScore] = []
     geval_score: float | None
     geval_reason: str | None
     error: str | None
@@ -240,6 +257,11 @@ class ScenarioRunPublic(ScenarioRunSummary):
 class ScenarioRunsPublic(BaseModel):
     data: list[ScenarioRunSummary]
     count: int
+
+
+class PairwiseVerdict(BaseModel):
+    winner: Literal["first", "second", "tie"]
+    reason: str
 
 
 def _normalize(value: Any) -> str:
@@ -265,14 +287,14 @@ def _local_metric_reason(
         )
         return f"정규화된 실제 응답과 기대 응답이 {result}."
     if name == "similarity":
-        return f"정규화된 응답의 문자 단위 유사도는 {score:.2%}입니다."
+        return f"정규화된 응답의 문자 단위 유사도는 {score:.2f}점입니다."
     if name == "token_recall":
         actual_tokens = set(_normalize(actual).split())
         expected_tokens = set(_normalize(expected).split())
         matched = len(actual_tokens & expected_tokens)
         return (
             f"기대 응답 토큰 {len(expected_tokens)}개 중 {matched}개가 실제 응답에 "
-            f"포함되어 있습니다. (포함률 {score:.2%})"
+            f"포함되어 있습니다. (점수 {score:.2f}점)"
         )
     return None
 
@@ -290,10 +312,14 @@ def _evaluate_row(row: dict[str, Any], index: int, threshold: float) -> Evaluati
     input_text, actual, expected = (
         str(row[key]) for key in ("input", "actual_output", "expected_output")
     )
-    exact_match = float(_normalize(actual) == _normalize(expected))
-    similarity = SequenceMatcher(None, _normalize(actual), _normalize(expected)).ratio()
-    token_recall = _token_recall(actual, expected)
-    score = round((exact_match + similarity + token_recall) / 3, 4)
+    exact_match = float(_normalize(actual) == _normalize(expected)) * 100
+    similarity = (
+        SequenceMatcher(None, _normalize(actual), _normalize(expected)).ratio() * 100
+    )
+    token_recall = _token_recall(actual, expected) * 100
+    score = round_score((exact_match + similarity + token_recall) / 3)
+    similarity = round_score(similarity)
+    token_recall = round_score(token_recall)
     return EvaluationRow(
         index=index,
         input=input_text,
@@ -311,16 +337,14 @@ def _evaluate_row(row: dict[str, Any], index: int, threshold: float) -> Evaluati
             ),
             MetricScore(
                 name="similarity",
-                score=round(similarity, 4),
-                reason=_local_metric_reason(
-                    "similarity", round(similarity, 4), actual, expected
-                ),
+                score=similarity,
+                reason=_local_metric_reason("similarity", similarity, actual, expected),
             ),
             MetricScore(
                 name="token_recall",
-                score=round(token_recall, 4),
+                score=token_recall,
                 reason=_local_metric_reason(
-                    "token_recall", round(token_recall, 4), actual, expected
+                    "token_recall", token_recall, actual, expected
                 ),
             ),
         ],
@@ -390,10 +414,10 @@ def _deepeval_single(
     )
     return MetricScore(
         name="deepeval_geval",
-        score=round(float(metric.score), 4),
+        score=round_score(float(metric.score or 0) * 100),
         reason=ensure_korean_reason(
             str(metric.reason or "")[:2_000] or None,
-            float(metric.score),
+            float(metric.score or 0) * 100,
             settings.DEEPEVAL_MODEL,
         ),
     )
@@ -434,14 +458,14 @@ async def _evaluate_live_row(
                 score=result.score,
                 weight_percent=result.weight_percent,
                 weighted_score=result.weighted_score,
-                raw_score=result.raw_score,
+                raw_score_ratio=result.raw_score_ratio,
                 score_direction=result.score_direction,
                 reason=result.reason,
                 error=result.error,
             )
             for result in composite_results
         ]
-        final_score = round(sum(metric.weighted_score or 0 for metric in metrics), 4)
+        final_score = aggregate_score(composite_results)
         return EvaluationRow(
             index=index,
             input=input_text,
@@ -462,38 +486,6 @@ async def _evaluate_live_row(
         score=score.score,
         passed=score.score >= threshold,
         metrics=[score],
-    )
-
-
-def _deepeval_conversation(
-    turns: list[tuple[str, str]], threshold: float
-) -> tuple[float, str | None]:
-    """Score the completed conversation, not each request in isolation."""
-    _require_deepeval()
-    from deepeval.metrics import ConversationalGEval
-    from deepeval.test_case import ConversationalTestCase, MultiTurnParams, Turn
-
-    test_case = ConversationalTestCase(
-        turns=[Turn(role=role, content=content) for role, content in turns]
-    )
-    metric = ConversationalGEval(
-        name="멀티턴 대화 품질",
-        criteria=(
-            "어시스턴트 응답이 자연스럽고, 전체 대화에서 문맥을 일관되게 "
-            "유지하며, 사용자 요청에 관련되고 유용한지 평가하세요. 이전 턴의 "
-            "정보와 제약을 후속 응답이 올바르게 반영했는지 확인하세요. "
-            "평가 이유는 반드시 자연스러운 한국어로 작성하세요."
-        ),
-        evaluation_params=[MultiTurnParams.ROLE, MultiTurnParams.CONTENT],
-        threshold=threshold,
-        model=settings.DEEPEVAL_MODEL,
-    )
-    metric.measure(test_case)
-    score = round(float(metric.score), 4)
-    return score, ensure_korean_reason(
-        str(metric.reason or "")[:2_000] or None,
-        score,
-        settings.DEEPEVAL_MODEL,
     )
 
 
@@ -622,6 +614,23 @@ def _assert_url_allowed(endpoint: EvaluationEndpoint, url: str) -> str:
     return candidate
 
 
+def _relative_turn_url(endpoint: EvaluationEndpoint, url: str) -> str:
+    if urlsplit(url).scheme:
+        absolute = _assert_url_allowed(endpoint, url)
+        parsed = urlsplit(absolute)
+        return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    if not url.startswith("/") or url.startswith("//"):
+        raise HTTPException(422, "Scenario turn URL must be an origin-relative path")
+    return url
+
+
+def _turn_endpoint_url(endpoint: EvaluationEndpoint, relative_url: str) -> str:
+    if urlsplit(relative_url).scheme:
+        relative_url = _relative_turn_url(endpoint, relative_url)
+    candidate = urljoin(endpoint.base_url.rstrip("/") + "/", relative_url.lstrip("/"))
+    return _assert_url_allowed(endpoint, candidate)
+
+
 async def _endpoint_or_422(
     session: SessionDep, endpoint_id: uuid.UUID | None
 ) -> EvaluationEndpoint:
@@ -658,9 +667,9 @@ async def _scenario_or_404(
     return scenario
 
 
-async def _count(session: SessionDep, model: Any, condition: Any) -> int:
+async def _count(session: SessionDep, model: Any, *conditions: Any) -> int:
     return int(
-        (await session.exec(select(func.count(model.id)).where(condition))).one()
+        (await session.exec(select(func.count(model.id)).where(*conditions))).one()
     )
 
 
@@ -679,8 +688,10 @@ def _metric_definition(
     item: EvaluationMetricProfileItem,
 ) -> EvaluationMetricDefinitionCreate:
     return EvaluationMetricDefinitionCreate(
-        metric_type=item.key,
+        metric_type=EvaluationMetricType(item.key),
         weight_percent=item.weight_percent,
+        config=item.config,
+        custom_instruction=item.custom_instruction,
     )
 
 
@@ -699,13 +710,21 @@ async def _metric_profile_items(
 
 
 async def _metric_profile_or_422(
-    session: SessionDep, profile_id: uuid.UUID, *, require_active: bool = True
+    session: SessionDep,
+    profile_id: uuid.UUID,
+    *,
+    require_active: bool = True,
+    expected_mode: EvaluationMode | None = None,
 ) -> tuple[EvaluationMetricProfile, list[EvaluationMetricProfileItem]]:
     profile = await session.get(EvaluationMetricProfile, profile_id)
     if not profile:
         raise HTTPException(422, "Selected metric profile does not exist")
     if require_active and not profile.is_active:
         raise HTTPException(422, "Selected metric profile is inactive")
+    if expected_mode is not None and profile.evaluation_mode != expected_mode.value:
+        raise HTTPException(
+            422, "Selected metric profile has the wrong evaluation mode"
+        )
     items = await _metric_profile_items(session, profile.id)
     if not items:
         raise HTTPException(422, "Selected metric profile has no metrics")
@@ -741,6 +760,17 @@ def _metric_profile_public(
                 docs_url=catalog_definition(
                     _metric_definition(item).metric_type
                 ).docs_url,
+                evaluation_mode=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).evaluation_mode,
+                required_config=list(
+                    catalog_definition(
+                        _metric_definition(item).metric_type
+                    ).required_config
+                ),
+                supports_custom_instruction=catalog_definition(
+                    _metric_definition(item).metric_type
+                ).supports_custom_instruction,
                 **_metric_definition(item).model_dump(),
             )
             for item in items
@@ -755,11 +785,14 @@ def _metric_profile_snapshot(
         "id": str(profile.id),
         "name": profile.name,
         "version": profile.version,
+        "evaluation_mode": profile.evaluation_mode,
         "metrics": [
             {
                 "metric_type": item.key,
                 "display_name": item.display_name,
                 "weight_percent": item.weight_percent,
+                "config": item.config,
+                "custom_instruction": item.custom_instruction,
             }
             for item in items
         ],
@@ -895,7 +928,7 @@ def _saved_run(
     serialized: list[SavedRunRow] = []
     for row in rows:
         baseline = baseline_by_dataset.get(row.dataset_row_id)
-        metrics = [MetricScore(**metric) for metric in (row.metrics or [])]
+        metrics = [MetricScore.model_validate(metric) for metric in (row.metrics or [])]
         for metric in metrics:
             if metric.reason is None:
                 metric.reason = _local_metric_reason(
@@ -912,7 +945,11 @@ def _saved_run(
                 output_changed=(row.actual_output != baseline.actual_output)
                 if baseline
                 else None,
-                score_delta=round(row.score - baseline.score, 4) if baseline else None,
+                score_delta=(
+                    round_score(row.score - baseline.score, clamp=False)
+                    if baseline and row.score is not None and baseline.score is not None
+                    else None
+                ),
             )
         )
     return SavedRun(
@@ -931,8 +968,8 @@ def _html_report(
     def escaped(value: object | None) -> str:
         return html.escape("" if value is None else str(value), quote=True)
 
-    def score(value: float) -> str:
-        return f"{value * 100:.2f}점"
+    def score(value: float | None) -> str:
+        return f"{value:.2f}점" if value is not None else "점수 없음"
 
     profile_metrics = []
     profile_name = "-"
@@ -1035,7 +1072,11 @@ def _scenario_run(
                 output_changed=(turn.actual_output != baseline.actual_output)
                 if baseline
                 else None,
-                score_delta=round(turn.score - baseline.score, 4) if baseline else None,
+                score_delta=(
+                    round_score(turn.score - baseline.score, clamp=False)
+                    if baseline
+                    else None
+                ),
             )
             for turn in turns
             for baseline in [baseline_by_identifier.get(turn.identifier)]
@@ -1067,7 +1108,7 @@ def _conversation_user_content(request_body: str) -> str:
         return request_body
     if isinstance(payload, dict):
         if isinstance(payload.get("message"), str):
-            return payload["message"]
+            return str(payload["message"])
         messages = payload.get("messages")
         if isinstance(messages, list):
             for message in reversed(messages):
@@ -1076,46 +1117,8 @@ def _conversation_user_content(request_body: str) -> str:
                     and message.get("role") == "user"
                     and isinstance(message.get("content"), str)
                 ):
-                    return message["content"]
+                    return str(message.get("content"))
     return request_body
-
-
-def _overall_conversation_result(
-    *,
-    turn_average_score: float,
-    conversation_score: float | None,
-    conversation_reason: str | None,
-    threshold: float,
-    passed_turns: int,
-    total_turns: int,
-    error: str | None,
-) -> tuple[float, bool, str]:
-    if conversation_score is None:
-        overall_score = turn_average_score
-        flow_summary = "대화 흐름 점수 없음(로컬 평가 방식)"
-        flow_passed = True
-    else:
-        overall_score = round(
-            turn_average_score * TURN_SCORE_WEIGHT
-            + conversation_score * CONVERSATION_SCORE_WEIGHT,
-            4,
-        )
-        flow_summary = f"대화 흐름 {conversation_score * 100:.2f}점"
-        flow_passed = conversation_score >= threshold
-    all_turns_passed = total_turns > 0 and passed_turns == total_turns
-    overall_passed = bool(
-        not error and all_turns_passed and flow_passed and overall_score >= threshold
-    )
-    verdict = "통과" if overall_passed else "실패"
-    reason = (
-        f"종합 {overall_score * 100:.2f}점 ({verdict}) · "
-        f"턴별 정확성 {turn_average_score * 100:.2f}점 · {flow_summary}."
-    )
-    if conversation_reason:
-        reason += f" 대화 흐름 판정: {conversation_reason}"
-    if error:
-        reason += f" 실행 오류: {error}"
-    return overall_score, overall_passed, reason[:4_000]
 
 
 @router.get("/integrations", response_model=IntegrationsResponse)
@@ -1147,14 +1150,27 @@ async def read_integrations(_current_user: CurrentUser) -> IntegrationsResponse:
 
 @router.get("/metric-profiles", response_model=EvaluationMetricProfilesPublic)
 async def read_metric_profiles(
-    session: SessionDep, user: CurrentUser
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=10, ge=1, le=200),
+    evaluation_mode: EvaluationMode | None = None,
 ) -> EvaluationMetricProfilesPublic:
     statement = select(EvaluationMetricProfile).order_by(
         col(EvaluationMetricProfile.updated_at).desc()
     )
     if not user.is_superuser:
         statement = statement.where(EvaluationMetricProfile.is_active == True)  # noqa: E712
-    profiles = list((await session.exec(statement)).all())
+    if evaluation_mode is not None:
+        statement = statement.where(
+            EvaluationMetricProfile.evaluation_mode == evaluation_mode.value
+        )
+    count = int(
+        (
+            await session.exec(select(func.count()).select_from(statement.subquery()))
+        ).one()
+    )
+    profiles = list((await session.exec(statement.offset(offset).limit(limit))).all())
     return EvaluationMetricProfilesPublic(
         data=[
             _metric_profile_public(
@@ -1162,12 +1178,14 @@ async def read_metric_profiles(
             )
             for profile in profiles
         ],
-        count=len(profiles),
+        count=count,
     )
 
 
 @router.get("/metric-catalog", response_model=EvaluationMetricCatalogPublic)
-async def read_metric_catalog(_user: CurrentUser) -> EvaluationMetricCatalogPublic:
+async def read_metric_catalog(
+    _user: CurrentUser, evaluation_mode: EvaluationMode | None = None
+) -> EvaluationMetricCatalogPublic:
     data = [
         EvaluationMetricCatalogItem(
             metric_type=metric_type,
@@ -1177,8 +1195,12 @@ async def read_metric_catalog(_user: CurrentUser) -> EvaluationMetricCatalogPubl
             score_direction=definition.score_direction,
             uses_llm=definition.uses_llm,
             docs_url=definition.docs_url,
+            evaluation_mode=definition.evaluation_mode,
+            required_config=list(definition.required_config),
+            supports_custom_instruction=definition.supports_custom_instruction,
         )
         for metric_type, definition in METRIC_CATALOG.items()
+        if evaluation_mode is None or definition.evaluation_mode == evaluation_mode
     ]
     return EvaluationMetricCatalogPublic(data=data, count=len(data))
 
@@ -1203,6 +1225,8 @@ async def create_metric_profile(
             evaluation_params=list(
                 catalog_definition(metric.metric_type).required_fields
             ),
+            config=metric.config,
+            custom_instruction=metric.custom_instruction,
         )
         for position, metric in enumerate(profile_in.metrics)
     ]
@@ -1243,6 +1267,8 @@ async def update_metric_profile(
             evaluation_params=list(
                 catalog_definition(metric.metric_type).required_fields
             ),
+            config=metric.config,
+            custom_instruction=metric.custom_instruction,
         )
         for position, metric in enumerate(profile_in.metrics)
     ]
@@ -1253,16 +1279,74 @@ async def update_metric_profile(
     return _metric_profile_public(profile, items)
 
 
+async def _delete_metric_profiles(ids: list[uuid.UUID], session: SessionDep) -> None:
+    profiles = list(
+        (
+            await session.exec(
+                select(EvaluationMetricProfile).where(
+                    col(EvaluationMetricProfile.id).in_(ids)
+                )
+            )
+        ).all()
+    )
+    if len(profiles) != len(ids):
+        raise HTTPException(404, "Metric profile not found")
+    references = 0
+    for model, field in (
+        (EvaluationDataset, EvaluationDataset.metric_profile_id),
+        (EvaluationScenario, EvaluationScenario.metric_profile_id),
+        (EvaluationRun, EvaluationRun.metric_profile_id),
+        (EvaluationScenarioRun, EvaluationScenarioRun.metric_profile_id),
+        (EvaluationComparison, EvaluationComparison.metric_profile_id),
+    ):
+        references += int(
+            (
+                await session.exec(
+                    select(func.count()).select_from(model).where(col(field).in_(ids))
+                )
+            ).one()
+        )
+    if references:
+        raise HTTPException(409, "Referenced metric profiles cannot be deleted")
+    for profile in profiles:
+        await session.delete(profile)
+    await session.commit()
+
+
+@router.delete("/metric-profiles/{profile_id}")
+async def delete_metric_profile(
+    profile_id: uuid.UUID, session: SessionDep, _admin: CurrentSuperuser
+) -> Message:
+    await _delete_metric_profiles([profile_id], session)
+    return Message(message="Metric profile deleted successfully")
+
+
+@router.post("/metric-profiles/bulk-delete")
+async def bulk_delete_metric_profiles(
+    request: BulkDeleteRequest, session: SessionDep, _admin: CurrentSuperuser
+) -> Message:
+    await _delete_metric_profiles(request.ids, session)
+    return Message(message=f"Deleted {len(request.ids)} metric profiles")
+
+
 @router.get("/endpoints", response_model=EvaluationEndpointsPublic)
 async def read_endpoints(
-    session: SessionDep, _user: CurrentUser
+    session: SessionDep,
+    _user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationEndpointsPublic:
     statement = select(EvaluationEndpoint).order_by(col(EvaluationEndpoint.name))
     if not _user.is_superuser:
         statement = statement.where(EvaluationEndpoint.is_active == True)  # noqa: E712
-    endpoints = list((await session.exec(statement)).all())
+    count = int(
+        (
+            await session.exec(select(func.count()).select_from(statement.subquery()))
+        ).one()
+    )
+    endpoints = list((await session.exec(statement.offset(offset).limit(limit))).all())
     return EvaluationEndpointsPublic(
-        data=[_endpoint_public(item) for item in endpoints], count=len(endpoints)
+        data=[_endpoint_public(item) for item in endpoints], count=count
     )
 
 
@@ -1326,15 +1410,17 @@ async def read_datasets(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationDatasetsPublic:
     statement = (
         select(EvaluationDataset)
         .where(EvaluationDataset.evaluation_type == "single_turn")
         .order_by(col(EvaluationDataset.updated_at).desc())
     )
-    count_statement = select(func.count(EvaluationDataset.id)).where(
-        EvaluationDataset.evaluation_type == "single_turn"
+    count_statement = (
+        select(func.count())
+        .select_from(EvaluationDataset)
+        .where(EvaluationDataset.evaluation_type == "single_turn")
     )
     if not user.is_superuser:
         statement, count_statement = (
@@ -1345,15 +1431,13 @@ async def read_datasets(
     counts = list(
         (
             await session.exec(
-                select(
-                    EvaluationDatasetRow.dataset_id, func.count(EvaluationDatasetRow.id)
-                )
+                select(col(EvaluationDatasetRow.dataset_id), func.count())
                 .where(
-                    EvaluationDatasetRow.dataset_id.in_(
+                    col(EvaluationDatasetRow.dataset_id).in_(
                         [item.id for item in datasets] or [uuid.UUID(int=0)]
                     )
                 )
-                .group_by(EvaluationDatasetRow.dataset_id)
+                .group_by(col(EvaluationDatasetRow.dataset_id))
             )
         ).all()
     )
@@ -1378,7 +1462,11 @@ async def create_dataset(
     if dataset_in.endpoint_id:
         await _endpoint_or_422(session, dataset_in.endpoint_id)
     if dataset_in.metric_profile_id:
-        await _metric_profile_or_422(session, dataset_in.metric_profile_id)
+        await _metric_profile_or_422(
+            session,
+            dataset_in.metric_profile_id,
+            expected_mode=EvaluationMode.SINGLE_TURN,
+        )
     _reject_sensitive_dataset_headers(dataset_in.headers)
     _validate_evaluator(dataset_in.evaluator)
     dataset = EvaluationDataset(
@@ -1496,7 +1584,7 @@ async def read_dataset(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(MAX_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationDatasetPublic:
     dataset = await _dataset_or_404(session, user, dataset_id)
     rows = list(
@@ -1546,22 +1634,26 @@ async def export_single_turn_dataset(
         name=dataset.name,
         description=dataset.description,
         test_type="single_turn",
-        endpoint_id=dataset.endpoint_id,
+        endpoint_id=cast(uuid.UUID, dataset.endpoint_id),
         metric_profile_id=dataset.metric_profile_id,
         threshold=dataset.threshold,
         evaluator=cast(Literal["deepeval", "local"], dataset.evaluator),
         cases=[
-            {
-                "input": row.input,
-                "request": EvaluationRequestDocument(
-                    headers=row.request_headers or dataset.headers,
-                    body=json.loads(row.request_body) if row.request_body else body,
-                    actual_output_json_pointer=(
-                        row.response_path if row.request_body else dataset.response_path
+            SingleTurnDatasetCaseDocument.model_validate(
+                {
+                    "input": row.input,
+                    "request": EvaluationRequestDocument(
+                        headers=row.request_headers or dataset.headers,
+                        body=json.loads(row.request_body) if row.request_body else body,
+                        actual_output_json_pointer=(
+                            row.response_path
+                            if row.request_body
+                            else dataset.response_path
+                        ),
                     ),
-                ),
-                "expected_output": row.expected_output,
-            }
+                    "expected_output": row.expected_output,
+                }
+            )
             for row in rows
         ],
     )
@@ -1603,7 +1695,11 @@ async def update_dataset(
     if dataset_in.endpoint_id:
         await _endpoint_or_422(session, dataset_in.endpoint_id)
     if dataset_in.metric_profile_id:
-        await _metric_profile_or_422(session, dataset_in.metric_profile_id)
+        await _metric_profile_or_422(
+            session,
+            dataset_in.metric_profile_id,
+            expected_mode=EvaluationMode.SINGLE_TURN,
+        )
     if dataset_in.headers is not None:
         _reject_sensitive_dataset_headers(dataset_in.headers)
     if dataset_in.evaluator is not None:
@@ -1632,6 +1728,31 @@ async def delete_dataset(
     await session.delete(dataset)
     await session.commit()
     return Message(message="Evaluation dataset deleted successfully")
+
+
+@router.get(
+    "/single-turn/datasets/{dataset_id}/rows",
+    response_model=EvaluationDatasetRowsPublic,
+)
+async def read_dataset_rows(
+    dataset_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=200),
+) -> EvaluationDatasetRowsPublic:
+    await _dataset_or_404(session, user, dataset_id)
+    condition = EvaluationDatasetRow.dataset_id == dataset_id
+    statement = (
+        select(EvaluationDatasetRow)
+        .where(condition)
+        .order_by(col(EvaluationDatasetRow.created_at))
+    )
+    rows = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    return EvaluationDatasetRowsPublic(
+        data=[EvaluationDatasetRowPublic.model_validate(row) for row in rows],
+        count=await _count(session, EvaluationDatasetRow, condition),
+    )
 
 
 @router.post(
@@ -1714,13 +1835,17 @@ async def _validate_dataset_job_request(
     session: AsyncSession,
     user: User,
     baseline_run_id: uuid.UUID | None,
+    metric_profile_id: uuid.UUID | None = None,
 ) -> None:
     dataset = await _dataset_or_404(session, user, dataset_id)
     _ensure_evaluator_ready(dataset.evaluator)
     if dataset.evaluator == "deepeval":
-        if not dataset.metric_profile_id:
+        selected_profile_id = metric_profile_id or dataset.metric_profile_id
+        if not selected_profile_id:
             raise HTTPException(422, "DeepEval datasets require a metric profile")
-        await _metric_profile_or_422(session, dataset.metric_profile_id)
+        await _metric_profile_or_422(
+            session, selected_profile_id, expected_mode=EvaluationMode.SINGLE_TURN
+        )
     await _endpoint_or_422(session, dataset.endpoint_id)
     row_count = await _count(
         session, EvaluationDatasetRow, EvaluationDatasetRow.dataset_id == dataset_id
@@ -1770,13 +1895,17 @@ async def enqueue_saved_dataset_run(
     session: SessionDep,
     user: CurrentUser,
     baseline_run_id: uuid.UUID | None = Query(default=None),
+    metric_profile_id: uuid.UUID | None = Query(default=None),
 ) -> EvaluationJobPublic:
-    await _validate_dataset_job_request(dataset_id, session, user, baseline_run_id)
+    await _validate_dataset_job_request(
+        dataset_id, session, user, baseline_run_id, metric_profile_id
+    )
     job = await enqueue_dataset_job(
         session,
         dataset_id=dataset_id,
         owner_id=user.id,
         baseline_run_id=baseline_run_id,
+        metric_profile_id=metric_profile_id,
     )
     return await _job_public(session, job)
 
@@ -1797,6 +1926,10 @@ async def _execute_saved_dataset(
     user: User,
     baseline_run_id: uuid.UUID | None = None,
     job_id: uuid.UUID | None = None,
+    endpoint_override_id: uuid.UUID | None = None,
+    metric_profile_override_id: uuid.UUID | None = None,
+    comparison_group_id: uuid.UUID | None = None,
+    comparison_mode: EvaluationComparisonMode | None = None,
 ) -> SavedRun:
     async with _run_semaphore:
         dataset = await _dataset_or_404(session, user, dataset_id)
@@ -1804,16 +1937,19 @@ async def _execute_saved_dataset(
         metric_profile: EvaluationMetricProfile | None = None
         metric_profile_items: list[EvaluationMetricProfileItem] = []
         metric_definitions: list[EvaluationMetricDefinitionCreate] | None = None
-        if dataset.evaluator == "deepeval" and dataset.metric_profile_id:
+        selected_profile_id = metric_profile_override_id or dataset.metric_profile_id
+        if dataset.evaluator == "deepeval" and selected_profile_id:
             metric_profile, metric_profile_items = await _metric_profile_or_422(
-                session, dataset.metric_profile_id
+                session, selected_profile_id, expected_mode=EvaluationMode.SINGLE_TURN
             )
             metric_definitions = [
                 _metric_definition(item) for item in metric_profile_items
             ]
         if dataset.evaluator == "deepeval" and not metric_definitions:
             raise HTTPException(422, "DeepEval datasets require a metric profile")
-        endpoint = await _endpoint_or_422(session, dataset.endpoint_id)
+        endpoint = await _endpoint_or_422(
+            session, endpoint_override_id or dataset.endpoint_id
+        )
         rows = list(
             (
                 await session.exec(
@@ -1851,6 +1987,7 @@ async def _execute_saved_dataset(
             baseline_run_id=baseline_run_id,
             evaluator=dataset.evaluator,
             job_id=job_id,
+            comparison_group_id=comparison_group_id,
             metric_profile_id=metric_profile.id if metric_profile else None,
             metric_profile_version=metric_profile.version if metric_profile else None,
             metric_profile_snapshot=_metric_profile_snapshot(
@@ -1881,14 +2018,18 @@ async def _execute_saved_dataset(
                     row.response_path if row.request_body else dataset.response_path,
                     {"input": row.input},
                 )
-                evaluation = await _evaluate_live_row(
-                    row.input,
-                    actual,
-                    row.expected_output,
-                    index,
-                    dataset.threshold,
-                    dataset.evaluator,
-                    metric_definitions,
+                evaluation = (
+                    await _evaluate_live_row(
+                        row.input,
+                        actual,
+                        row.expected_output,
+                        index,
+                        dataset.threshold,
+                        dataset.evaluator,
+                        metric_definitions,
+                    )
+                    if comparison_mode != EvaluationComparisonMode.RELATIVE
+                    else None
                 )
                 saved_row = EvaluationRunRow(
                     run_id=run.id,
@@ -1898,28 +2039,34 @@ async def _execute_saved_dataset(
                     actual_output=actual,
                     response_status=status,
                     response_body=response_body,
-                    score=evaluation.score,
-                    passed=evaluation.passed,
-                    metrics=[item.model_dump() for item in evaluation.metrics],
+                    score=evaluation.score if evaluation else None,
+                    passed=evaluation.passed if evaluation else False,
+                    metrics=(
+                        [item.model_dump() for item in evaluation.metrics]
+                        if evaluation
+                        else []
+                    ),
                 )
                 saved.append(saved_row)
-                metric_results.extend(
-                    EvaluationRunMetricResult(
-                        run_row_id=saved_row.id,
-                        metric_key=metric.name,
-                        display_name=metric.display_name or metric.name,
-                        score=metric.score,
-                        raw_score=metric.raw_score,
-                        score_direction=metric.score_direction or "higher_is_better",
-                        weight_percent=metric.weight_percent,
-                        weighted_score=metric.weighted_score,
-                        reason=metric.reason,
-                        error=metric.error,
+                if evaluation:
+                    metric_results.extend(
+                        EvaluationRunMetricResult(
+                            run_row_id=saved_row.id,
+                            metric_key=metric.name,
+                            display_name=metric.display_name or metric.name,
+                            score=metric.score,
+                            raw_score_ratio=metric.raw_score_ratio,
+                            score_direction=metric.score_direction
+                            or "higher_is_better",
+                            weight_percent=metric.weight_percent,
+                            weighted_score=metric.weighted_score,
+                            reason=metric.reason,
+                            error=metric.error,
+                        )
+                        for metric in evaluation.metrics
+                        if metric.weight_percent is not None
+                        and metric.weighted_score is not None
                     )
-                    for metric in evaluation.metrics
-                    if metric.weight_percent is not None
-                    and metric.weighted_score is not None
-                )
             except (httpx.HTTPError, ValueError) as exc:
                 saved.append(
                     EvaluationRunRow(
@@ -1927,6 +2074,11 @@ async def _execute_saved_dataset(
                         dataset_row_id=row.id,
                         input=row.input,
                         expected_output=row.expected_output,
+                        score=(
+                            None
+                            if comparison_mode == EvaluationComparisonMode.RELATIVE
+                            else 0
+                        ),
                         error=str(exc),
                         metrics=[],
                     )
@@ -1935,14 +2087,446 @@ async def _execute_saved_dataset(
         run.total, run.passed = len(saved), sum(row.passed for row in saved)
         run.failed = run.total - run.passed
         run.pass_rate = round(run.passed / run.total, 4)
-        run.average_score = round(sum(row.score for row in saved) / run.total, 4)
+        scored = [row.score for row in saved if row.score is not None]
+        run.average_score = round_score(sum(scored) / len(scored)) if scored else 0
         session.add(run)
         await session.commit()
         await session.refresh(run)
         return _saved_run(run, saved, baseline_rows)
 
 
+async def _arena_compare_rows(
+    row_a: SavedRunRow, row_b: SavedRunRow
+) -> dict[str, object]:
+    from deepeval.metrics import ArenaGEval
+    from deepeval.test_case import (
+        ArenaTestCase,
+        Contestant,
+        LLMTestCase,
+        SingleTurnParams,
+    )
+
+    metric = ArenaGEval(
+        name="A/B 응답 비교",
+        criteria="동일 입력과 기대 응답을 기준으로 더 정확하고 유용하며 안전한 응답을 고르세요. 차이가 없으면 동점으로 판정하고 이유는 한국어로 작성하세요.",
+        evaluation_params=[
+            SingleTurnParams.INPUT,
+            SingleTurnParams.ACTUAL_OUTPUT,
+            SingleTurnParams.EXPECTED_OUTPUT,
+        ],
+        model=settings.DEEPEVAL_MODEL,
+    )
+    await metric.a_measure(
+        ArenaTestCase(
+            contestants=[
+                Contestant(
+                    name="A",
+                    test_case=LLMTestCase(
+                        input=row_a.input,
+                        actual_output=row_a.actual_output,
+                        expected_output=row_a.expected_output,
+                    ),
+                ),
+                Contestant(
+                    name="B",
+                    test_case=LLMTestCase(
+                        input=row_b.input,
+                        actual_output=row_b.actual_output,
+                        expected_output=row_b.expected_output,
+                    ),
+                ),
+            ]
+        )
+    )
+    winner = str(metric.winner or "tie").strip().upper()
+    return {
+        "winner": winner if winner in {"A", "B"} else "tie",
+        "reason": ensure_korean_reason(
+            str(metric.reason or "")[:2000] or None, 0, settings.DEEPEVAL_MODEL
+        ),
+    }
+
+
+def _comparison_public(comparison: EvaluationComparison) -> EvaluationComparisonPublic:
+    return EvaluationComparisonPublic.model_validate(comparison)
+
+
+@router.post(
+    "/single-turn/datasets/{dataset_id}/comparisons",
+    response_model=EvaluationComparisonPublic,
+)
+async def create_single_turn_comparison(
+    dataset_id: uuid.UUID,
+    comparison_in: EvaluationComparisonCreate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationComparisonPublic:
+    dataset = await _dataset_or_404(session, user, dataset_id)
+    endpoint_a = await _endpoint_or_422(session, comparison_in.endpoint_a_id)
+    endpoint_b = await _endpoint_or_422(session, comparison_in.endpoint_b_id)
+    profile, items = await _metric_profile_or_422(
+        session,
+        comparison_in.metric_profile_id,
+        expected_mode=EvaluationMode.SINGLE_TURN,
+    )
+    comparison = EvaluationComparison(
+        owner_id=user.id,
+        evaluation_mode="single_turn",
+        dataset_id=dataset.id,
+        endpoint_a_id=endpoint_a.id,
+        endpoint_b_id=endpoint_b.id,
+        metric_profile_id=profile.id,
+        metric_profile_version=profile.version,
+        metric_profile_snapshot=_metric_profile_snapshot(profile, items),
+        comparison_mode=comparison_in.comparison_mode.value,
+    )
+    session.add(comparison)
+    await session.commit()
+    try:
+
+        async def execute_candidate(endpoint_id: uuid.UUID) -> SavedRun:
+            async with AsyncSession(
+                engine, expire_on_commit=False
+            ) as candidate_session:
+                return await _execute_saved_dataset(
+                    dataset.id,
+                    candidate_session,
+                    user,
+                    endpoint_override_id=endpoint_id,
+                    metric_profile_override_id=profile.id,
+                    comparison_group_id=comparison.id,
+                    comparison_mode=comparison_in.comparison_mode,
+                )
+
+        run_a, run_b = await asyncio.gather(
+            execute_candidate(endpoint_a.id), execute_candidate(endpoint_b.id)
+        )
+        comparison.run_a_id, comparison.run_b_id = run_a.id, run_b.id
+        by_dataset_row_b = {row.dataset_row_id: row for row in run_b.rows}
+        results: list[dict[str, object]] = []
+        for row_a in run_a.rows:
+            row_b = by_dataset_row_b.get(row_a.dataset_row_id)
+            if row_b is None:
+                continue
+            item: dict[str, object] = {
+                "row_id_a": str(row_a.id),
+                "row_id_b": str(row_b.id),
+                "input": row_a.input,
+                "score_a": row_a.score,
+                "score_b": row_b.score,
+                "score_delta": (
+                    round_score(row_a.score - row_b.score, clamp=False)
+                    if row_a.score is not None and row_b.score is not None
+                    else None
+                ),
+            }
+            if row_a.error or row_b.error:
+                item.update(
+                    {
+                        "winner": None,
+                        "excluded": comparison_in.comparison_mode
+                        in {
+                            EvaluationComparisonMode.RELATIVE,
+                            EvaluationComparisonMode.HYBRID,
+                        },
+                        "reason": (
+                            "한쪽 후보 실행 실패를 절대평가에서는 0점으로 보존하고 "
+                            "상대평가에서는 제외했습니다."
+                        ),
+                    }
+                )
+            elif comparison_in.comparison_mode in {
+                EvaluationComparisonMode.RELATIVE,
+                EvaluationComparisonMode.HYBRID,
+            }:
+                item.update(await _arena_compare_rows(row_a, row_b))
+            results.append(item)
+        comparison.results = results
+        comparable = [item for item in results if not item.get("excluded")]
+        comparison.comparable_count = len(comparable)
+        comparison.winner_a_count = sum(
+            item.get("winner") == "A" for item in comparable
+        )
+        comparison.winner_b_count = sum(
+            item.get("winner") == "B" for item in comparable
+        )
+        comparison.tie_count = sum(item.get("winner") == "tie" for item in comparable)
+        comparison.status = "completed"
+    except Exception as exc:
+        comparison.status = "partial"
+        comparison.results = [
+            {"reason": f"외부 실행 실패로 비교가 일부만 저장되었습니다: {exc}"[:2000]}
+        ]
+        session.add(comparison)
+        await session.commit()
+        await session.refresh(comparison)
+        return _comparison_public(comparison)
+    session.add(comparison)
+    await session.commit()
+    await session.refresh(comparison)
+    return _comparison_public(comparison)
+
+
+@router.get(
+    "/single-turn/datasets/{dataset_id}/comparisons",
+    response_model=EvaluationComparisonsPublic,
+)
+async def read_single_turn_comparisons(
+    dataset_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=200),
+) -> EvaluationComparisonsPublic:
+    await _dataset_or_404(session, user, dataset_id)
+    condition = EvaluationComparison.dataset_id == dataset_id
+    statement = (
+        select(EvaluationComparison)
+        .where(condition)
+        .order_by(col(EvaluationComparison.created_at).desc())
+    )
+    data = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    return EvaluationComparisonsPublic(
+        data=[_comparison_public(item) for item in data],
+        count=await _count(session, EvaluationComparison, condition),
+    )
+
+
+async def _blind_conversation_pairwise(
+    turns_a: list[ScenarioRunTurnPublic], turns_b: list[ScenarioRunTurnPublic]
+) -> dict[str, object]:
+    from deepeval.models import GPTModel
+
+    conversations = [
+        [{"user": turn.request_body, "assistant": turn.actual_output} for turn in turns]
+        for turns in (turns_a, turns_b)
+    ]
+
+    async def judge(
+        first: list[dict[str, str]], second: list[dict[str, str]]
+    ) -> PairwiseVerdict:
+        prompt = (
+            "두 익명 대화 중 문맥 유지, 정확성, 유용성, 안전성이 더 나은 대화를 "
+            "선택하세요. 품질 차이가 없으면 tie로 판정하고 한국어 reason을 작성하세요. "
+            f"first={json.dumps(first, ensure_ascii=False)} second={json.dumps(second, ensure_ascii=False)}"
+        )
+        generated, _ = await GPTModel(model=settings.DEEPEVAL_MODEL).a_generate(
+            prompt, schema=PairwiseVerdict
+        )
+        return (
+            generated
+            if isinstance(generated, PairwiseVerdict)
+            else PairwiseVerdict.model_validate(generated)
+        )
+
+    forward, reverse = await asyncio.gather(
+        judge(conversations[0], conversations[1]),
+        judge(conversations[1], conversations[0]),
+    )
+    forward_winner = {"first": "A", "second": "B", "tie": "tie"}[forward.winner]
+    reverse_winner = {"first": "B", "second": "A", "tie": "tie"}[reverse.winner]
+    winner = forward_winner if forward_winner == reverse_winner else "tie"
+    reason = (
+        forward.reason
+        if winner != "tie"
+        else "후보 순서 반전 판정이 일치하지 않아 동점으로 처리했습니다."
+    )
+    return {
+        "winner": winner,
+        "reason": reason[:2000],
+        "forward_winner": forward_winner,
+        "reverse_winner": reverse_winner,
+    }
+
+
+@router.post(
+    "/multi-turn/datasets/{scenario_id}/comparisons",
+    response_model=EvaluationComparisonPublic,
+)
+async def create_multi_turn_comparison(
+    scenario_id: uuid.UUID,
+    comparison_in: EvaluationComparisonCreate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationComparisonPublic:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    endpoint_a = await _endpoint_or_422(session, comparison_in.endpoint_a_id)
+    endpoint_b = await _endpoint_or_422(session, comparison_in.endpoint_b_id)
+    profile, items = await _metric_profile_or_422(
+        session,
+        comparison_in.metric_profile_id,
+        expected_mode=EvaluationMode.MULTI_TURN,
+    )
+    comparison = EvaluationComparison(
+        owner_id=user.id,
+        evaluation_mode="multi_turn",
+        scenario_id=scenario.id,
+        endpoint_a_id=endpoint_a.id,
+        endpoint_b_id=endpoint_b.id,
+        metric_profile_id=profile.id,
+        metric_profile_version=profile.version,
+        metric_profile_snapshot=_metric_profile_snapshot(profile, items),
+        comparison_mode=comparison_in.comparison_mode.value,
+    )
+    session.add(comparison)
+    await session.commit()
+    try:
+
+        async def execute_candidate(endpoint_id: uuid.UUID) -> ScenarioRunPublic:
+            async with AsyncSession(
+                engine, expire_on_commit=False
+            ) as candidate_session:
+                return await _execute_scenario(
+                    scenario.id,
+                    candidate_session,
+                    user,
+                    metric_profile_id=profile.id,
+                    endpoint_override_id=endpoint_id,
+                    comparison_group_id=comparison.id,
+                    comparison_mode=comparison_in.comparison_mode,
+                )
+
+        run_a, run_b = await asyncio.gather(
+            execute_candidate(endpoint_a.id), execute_candidate(endpoint_b.id)
+        )
+        comparison.scenario_run_a_id, comparison.scenario_run_b_id = run_a.id, run_b.id
+        has_absolute_scores = comparison_in.comparison_mode in {
+            EvaluationComparisonMode.ABSOLUTE,
+            EvaluationComparisonMode.HYBRID,
+        }
+        item: dict[str, object] = {
+            "score_a": run_a.overall_score if has_absolute_scores else None,
+            "score_b": run_b.overall_score if has_absolute_scores else None,
+            "score_delta": (
+                round_score(run_a.overall_score - run_b.overall_score, clamp=False)
+                if has_absolute_scores
+                else None
+            ),
+        }
+        if run_a.error or run_b.error:
+            comparison.status = "partial"
+            item.update(
+                {
+                    "winner": None,
+                    "reason": "한쪽 후보가 실패하여 후속 턴과 상대평가를 중단했습니다.",
+                }
+            )
+        elif comparison_in.comparison_mode in {
+            EvaluationComparisonMode.RELATIVE,
+            EvaluationComparisonMode.HYBRID,
+        }:
+            item.update(await _blind_conversation_pairwise(run_a.turns, run_b.turns))
+            comparison.status = "completed"
+        else:
+            comparison.status = "completed"
+        comparison.results = [item]
+        comparison.comparable_count = int(not run_a.error and not run_b.error)
+        comparison.winner_a_count = int(item.get("winner") == "A")
+        comparison.winner_b_count = int(item.get("winner") == "B")
+        comparison.tie_count = int(item.get("winner") == "tie")
+    except Exception as exc:
+        comparison.status = "partial"
+        comparison.results = [
+            {"reason": f"외부 실행 실패로 비교가 일부만 저장되었습니다: {exc}"[:2000]}
+        ]
+        session.add(comparison)
+        await session.commit()
+        await session.refresh(comparison)
+        return _comparison_public(comparison)
+    session.add(comparison)
+    await session.commit()
+    await session.refresh(comparison)
+    return _comparison_public(comparison)
+
+
+@router.get(
+    "/multi-turn/datasets/{scenario_id}/comparisons",
+    response_model=EvaluationComparisonsPublic,
+)
+async def read_multi_turn_comparisons(
+    scenario_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=200),
+) -> EvaluationComparisonsPublic:
+    await _scenario_or_404(session, user, scenario_id)
+    condition = EvaluationComparison.scenario_id == scenario_id
+    statement = (
+        select(EvaluationComparison)
+        .where(condition)
+        .order_by(col(EvaluationComparison.created_at).desc())
+    )
+    data = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    return EvaluationComparisonsPublic(
+        data=[_comparison_public(item) for item in data],
+        count=await _count(session, EvaluationComparison, condition),
+    )
+
+
+@router.get("/comparisons/{comparison_id}", response_model=EvaluationComparisonPublic)
+async def read_comparison(
+    comparison_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> EvaluationComparisonPublic:
+    comparison = await session.get(EvaluationComparison, comparison_id)
+    if not comparison or (not user.is_superuser and comparison.owner_id != user.id):
+        raise HTTPException(404, "Evaluation comparison not found")
+    return _comparison_public(comparison)
+
+
+@router.delete("/comparisons/{comparison_id}")
+async def delete_comparison(
+    comparison_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> Message:
+    comparison = await session.get(EvaluationComparison, comparison_id)
+    if not comparison or (not user.is_superuser and comparison.owner_id != user.id):
+        raise HTTPException(404, "Evaluation comparison not found")
+    await session.delete(comparison)
+    await session.commit()
+    return Message(message="Evaluation comparison deleted successfully")
+
+
+@router.get("/comparisons/{comparison_id}/report")
+async def download_comparison_report(
+    comparison_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> HTMLResponse:
+    comparison = await session.get(EvaluationComparison, comparison_id)
+    if not comparison or (not user.is_superuser and comparison.owner_id != user.id):
+        raise HTTPException(404, "Evaluation comparison not found")
+
+    def escaped(value: object | None) -> str:
+        return html.escape("" if value is None else str(value), quote=True)
+
+    rows = "".join(
+        "<tr>"
+        + "".join(
+            f"<td>{escaped(item.get(key))}</td>"
+            for key in (
+                "input",
+                "score_a",
+                "score_b",
+                "score_delta",
+                "winner",
+                "reason",
+            )
+        )
+        + "</tr>"
+        for item in comparison.results
+    )
+    report = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>A/B 비교 평가 리포트</title><style>body{{font-family:system-ui;margin:32px;color:#222}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top}}.cards{{display:flex;gap:16px;margin:20px 0}}.card{{border:1px solid #ddd;padding:12px}}</style></head><body><h1>A/B 비교 평가 리포트</h1><p>상태 {escaped(comparison.status)} · 모드 {escaped(comparison.comparison_mode)}</p><div class="cards"><div class="card">비교 가능 {comparison.comparable_count}</div><div class="card">A 승 {comparison.winner_a_count}</div><div class="card">B 승 {comparison.winner_b_count}</div><div class="card">동점 {comparison.tie_count}</div></div><table><thead><tr><th>입력</th><th>A 점수</th><th>B 점수</th><th>차이</th><th>승자</th><th>한국어 사유</th></tr></thead><tbody>{rows}</tbody></table></body></html>"""
+    return HTMLResponse(
+        content=report,
+        headers={
+            "Content-Disposition": f'attachment; filename="comparison-report-{comparison.id}.html"',
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 async def execute_saved_dataset_job(job: EvaluationJob) -> uuid.UUID:
+    if job.dataset_id is None:
+        raise ValueError("Dataset evaluation job has no dataset target")
     async with AsyncSession(engine, expire_on_commit=False) as session:
         existing_run_id = (
             await session.exec(
@@ -1960,6 +2544,7 @@ async def execute_saved_dataset_job(job: EvaluationJob) -> uuid.UUID:
             user,
             baseline_run_id=job.baseline_run_id,
             job_id=job.id,
+            metric_profile_override_id=job.metric_profile_id,
         )
         return result.id
 
@@ -2051,12 +2636,12 @@ async def read_all_evaluation_schedules(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationSchedulesPublic:
     statement = select(EvaluationSchedule).order_by(
         col(EvaluationSchedule.created_at).desc()
     )
-    count_statement = select(func.count(EvaluationSchedule.id))
+    count_statement = select(func.count()).select_from(EvaluationSchedule)
     if not user.is_superuser:
         statement = statement.where(EvaluationSchedule.owner_id == user.id)
         count_statement = count_statement.where(EvaluationSchedule.owner_id == user.id)
@@ -2098,7 +2683,7 @@ async def read_all_evaluation_schedules(
                 schedule,
                 datasets[schedule.dataset_id]
                 if schedule.dataset_id
-                else scenarios[schedule.scenario_id],
+                else scenarios[cast(uuid.UUID, schedule.scenario_id)],
                 owners.get(schedule.owner_id),
             )
             for schedule in schedules
@@ -2224,7 +2809,7 @@ async def read_evaluation_schedules(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationSchedulesPublic:
     dataset = await _dataset_or_404(session, user, dataset_id)
     statement = (
@@ -2352,14 +2937,17 @@ async def read_saved_runs(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> SavedRunsPublic:
     dataset = await _dataset_or_404(session, user, dataset_id)
     runs = list(
         (
             await session.exec(
                 select(EvaluationRun)
-                .where(EvaluationRun.dataset_id == dataset_id)
+                .where(
+                    EvaluationRun.dataset_id == dataset_id,
+                    col(EvaluationRun.comparison_group_id).is_(None),
+                )
                 .order_by(col(EvaluationRun.created_at).desc())
                 .offset(offset)
                 .limit(limit)
@@ -2377,7 +2965,10 @@ async def read_saved_runs(
     return SavedRunsPublic(
         data=[_run_summary(run, dataset, executors.get(run.owner_id)) for run in runs],
         count=await _count(
-            session, EvaluationRun, EvaluationRun.dataset_id == dataset_id
+            session,
+            EvaluationRun,
+            EvaluationRun.dataset_id == dataset_id,
+            col(EvaluationRun.comparison_group_id).is_(None),
         ),
     )
 
@@ -2394,7 +2985,7 @@ async def read_saved_run(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(MAX_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> SavedRun:
     dataset = await _dataset_or_404(session, user, dataset_id)
     run = await session.get(EvaluationRun, run_id)
@@ -2505,7 +3096,7 @@ def _scenario_turns(
             scenario_id=scenario_id,
             position=index,
             identifier=turn.identifier,
-            url=_assert_url_allowed(endpoint, turn.url),
+            url=_relative_turn_url(endpoint, turn.url),
             method="POST",
             encrypted_headers=encrypt_evaluation_headers(turn.headers),
             body_template=turn.body_template,
@@ -2542,11 +3133,11 @@ async def read_scenarios(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> EvaluationScenariosPublic:
     statement, count_statement = (
         select(EvaluationScenario).order_by(col(EvaluationScenario.updated_at).desc()),
-        select(func.count(EvaluationScenario.id)),
+        select(func.count()).select_from(EvaluationScenario),
     )
     if not user.is_superuser:
         statement, count_statement = (
@@ -2558,15 +3149,15 @@ async def read_scenarios(
         (
             await session.exec(
                 select(
-                    EvaluationScenarioTurn.scenario_id,
-                    func.count(EvaluationScenarioTurn.id),
+                    col(EvaluationScenarioTurn.scenario_id),
+                    func.count(),
                 )
                 .where(
-                    EvaluationScenarioTurn.scenario_id.in_(
+                    col(EvaluationScenarioTurn.scenario_id).in_(
                         [item.id for item in scenarios] or [uuid.UUID(int=0)]
                     )
                 )
-                .group_by(EvaluationScenarioTurn.scenario_id)
+                .group_by(col(EvaluationScenarioTurn.scenario_id))
             )
         ).all()
     )
@@ -2586,6 +3177,16 @@ async def create_scenario(
 ) -> EvaluationScenarioPublic:
     endpoint = await _endpoint_or_422(session, scenario_in.endpoint_id)
     _validate_evaluator(scenario_in.evaluator)
+    if scenario_in.evaluator == "deepeval" and not scenario_in.metric_profile_id:
+        raise HTTPException(
+            422, "DeepEval multi-turn datasets require a metric profile"
+        )
+    if scenario_in.metric_profile_id:
+        await _metric_profile_or_422(
+            session,
+            scenario_in.metric_profile_id,
+            expected_mode=EvaluationMode.MULTI_TURN,
+        )
     _reject_sensitive_turn_headers(scenario_in.turns, user)
     scenario = EvaluationScenario(
         **scenario_in.model_dump(exclude={"turns", "endpoint_id", "test_type"}),
@@ -2611,6 +3212,7 @@ def _multi_turn_document_create(
         description=document.description,
         endpoint_id=document.endpoint_id,
         threshold=document.threshold,
+        metric_profile_id=document.metric_profile_id,
         evaluator=document.evaluator,
         turns=[
             EvaluationScenarioTurnCreate(
@@ -2715,8 +3317,9 @@ async def export_multi_turn_dataset(
         test_type="multi_turn",
         endpoint_id=scenario.endpoint_id,
         threshold=scenario.threshold,
+        metric_profile_id=scenario.metric_profile_id,
         evaluator=cast(Literal["deepeval", "local"], scenario.evaluator),
-        cases=cases,
+        cases=[MultiTurnDatasetCaseDocument.model_validate(case) for case in cases],
     )
     return Response(
         content=document.model_dump_json(indent=2),
@@ -2749,6 +3352,20 @@ async def update_scenario(
     endpoint = await _endpoint_or_422(session, endpoint_id)
     if scenario_in.evaluator is not None:
         _validate_evaluator(scenario_in.evaluator)
+    next_evaluator = scenario_in.evaluator or scenario.evaluator
+    next_profile_id = (
+        scenario_in.metric_profile_id
+        if "metric_profile_id" in scenario_in.model_fields_set
+        else scenario.metric_profile_id
+    )
+    if next_evaluator == "deepeval" and not next_profile_id:
+        raise HTTPException(
+            422, "DeepEval multi-turn datasets require a metric profile"
+        )
+    if next_profile_id:
+        await _metric_profile_or_422(
+            session, next_profile_id, expected_mode=EvaluationMode.MULTI_TURN
+        )
     if scenario_in.turns is not None:
         _reject_sensitive_turn_headers(scenario_in.turns, user)
     scenario.sqlmodel_update(
@@ -2813,9 +3430,14 @@ async def run_scenario(
     session: SessionDep,
     user: CurrentUser,
     baseline_run_id: uuid.UUID | None = Query(default=None),
+    metric_profile_id: uuid.UUID | None = Query(default=None),
 ) -> ScenarioRunPublic:
     return await _execute_scenario(
-        scenario_id, session, user, baseline_run_id=baseline_run_id
+        scenario_id,
+        session,
+        user,
+        baseline_run_id=baseline_run_id,
+        metric_profile_id=metric_profile_id,
     )
 
 
@@ -2825,11 +3447,28 @@ async def _execute_scenario(
     user: User,
     baseline_run_id: uuid.UUID | None = None,
     job_id: uuid.UUID | None = None,
+    metric_profile_id: uuid.UUID | None = None,
+    endpoint_override_id: uuid.UUID | None = None,
+    comparison_group_id: uuid.UUID | None = None,
+    comparison_mode: EvaluationComparisonMode | None = None,
 ) -> ScenarioRunPublic:
     async with _run_semaphore:
         scenario = await _scenario_or_404(session, user, scenario_id)
         _ensure_evaluator_ready(scenario.evaluator)
-        endpoint = await _endpoint_or_422(session, scenario.endpoint_id)
+        endpoint = await _endpoint_or_422(
+            session, endpoint_override_id or scenario.endpoint_id
+        )
+        selected_profile_id = metric_profile_id or scenario.metric_profile_id
+        metric_profile = None
+        metric_profile_items: list[EvaluationMetricProfileItem] = []
+        if scenario.evaluator == "deepeval":
+            if selected_profile_id is None:
+                raise HTTPException(
+                    422, "DeepEval multi-turn runs require a metric profile"
+                )
+            metric_profile, metric_profile_items = await _metric_profile_or_422(
+                session, selected_profile_id, expected_mode=EvaluationMode.MULTI_TURN
+            )
         turns = list(
             (
                 await session.exec(
@@ -2861,6 +3500,14 @@ async def _execute_scenario(
             baseline_run_id=baseline_run_id,
             evaluator=scenario.evaluator,
             job_id=job_id,
+            comparison_group_id=comparison_group_id,
+            metric_profile_id=metric_profile.id if metric_profile else None,
+            metric_profile_version=metric_profile.version if metric_profile else None,
+            metric_profile_snapshot=(
+                _metric_profile_snapshot(metric_profile, metric_profile_items)
+                if metric_profile
+                else None
+            ),
         )
         session.add(run)
         await session.flush()
@@ -2880,7 +3527,7 @@ async def _execute_scenario(
                     **decrypt_evaluation_headers(turn.encrypted_headers),
                 }
                 status, raw, actual, request_body = await _call_endpoint(
-                    turn.url,
+                    _turn_endpoint_url(endpoint, turn.url),
                     headers,
                     turn.body_template,
                     turn.response_path,
@@ -2888,17 +3535,29 @@ async def _execute_scenario(
                     json_overrides={"thread_id": thread_id},
                 )
                 user_content = _conversation_user_content(request_body)
-                evaluation = await _evaluate_live_row(
-                    user_content,
-                    actual,
-                    turn.expected_output,
-                    turn.position,
-                    scenario.threshold,
-                    scenario.evaluator,
+                evaluation = (
+                    await _evaluate_live_row(
+                        user_content,
+                        actual,
+                        turn.expected_output,
+                        turn.position,
+                        scenario.threshold,
+                        scenario.evaluator,
+                    )
+                    if comparison_mode != EvaluationComparisonMode.RELATIVE
+                    else None
                 )
-                metric_reason = next(
-                    (metric.reason for metric in evaluation.metrics if metric.reason),
-                    None,
+                metric_reason = (
+                    next(
+                        (
+                            metric.reason
+                            for metric in evaluation.metrics
+                            if metric.reason
+                        ),
+                        "평가 사유가 제공되지 않았습니다.",
+                    )
+                    if evaluation
+                    else "상대평가 전용 실행으로 절대 품질점수를 계산하지 않았습니다."
                 )
                 result = EvaluationScenarioRunTurn(
                     run_id=run.id,
@@ -2910,8 +3569,8 @@ async def _execute_scenario(
                     expected_output=turn.expected_output,
                     response_status=status,
                     response_body=raw,
-                    score=evaluation.score,
-                    passed=evaluation.passed,
+                    score=evaluation.score if evaluation else 0,
+                    passed=evaluation.passed if evaluation else False,
                     reason=metric_reason,
                 )
                 results.append(result)
@@ -2937,27 +3596,41 @@ async def _execute_scenario(
         session.add_all(results)
         run.total, run.passed = len(results), sum(item.passed for item in results)
         run.failed = run.total - run.passed
-        run.turn_average_score = round(
-            sum(item.score for item in results) / run.total, 4
+        run.turn_average_score = round_score(
+            sum(item.score for item in results) / run.total
         )
-        if scenario.evaluator == "deepeval" and not run.error:
+        if comparison_mode == EvaluationComparisonMode.RELATIVE:
+            run.overall_score = 0
+            run.overall_passed = False
+            run.overall_reason = (
+                "상대평가 전용 실행으로 절대 품질점수를 계산하지 않았습니다."
+            )
+        elif scenario.evaluator == "deepeval" and not run.error:
             try:
-                run.geval_score, run.geval_reason = await asyncio.to_thread(
-                    _deepeval_conversation, conversation, scenario.threshold
+                conversation_results = await evaluate_conversation_metrics(
+                    [_metric_definition(item) for item in metric_profile_items],
+                    turns=conversation,
+                    model_name=settings.DEEPEVAL_MODEL,
+                )
+                run.metrics = [result.model_dump() for result in conversation_results]
+                run.overall_score = aggregate_score(conversation_results)
+                run.overall_passed = run.overall_score >= scenario.threshold
+                run.overall_reason = (
+                    f"선택한 멀티턴 프로필의 가중합은 {run.overall_score:.3f}점이며 "
+                    f"임계값 {scenario.threshold:.3f}점에 "
+                    f"{'통과했습니다.' if run.overall_passed else '미달했습니다.'}"
                 )
             except Exception as exc:
                 run.error = f"전체 대화 평가에 실패했습니다: {exc}"[:1_000]
-        run.overall_score, run.overall_passed, run.overall_reason = (
-            _overall_conversation_result(
-                turn_average_score=run.turn_average_score,
-                conversation_score=run.geval_score,
-                conversation_reason=run.geval_reason,
-                threshold=scenario.threshold,
-                passed_turns=run.passed,
-                total_turns=run.total,
-                error=run.error,
+        elif scenario.evaluator == "local":
+            run.overall_score = run.turn_average_score
+            run.overall_passed = (
+                not run.error and run.overall_score >= scenario.threshold
             )
-        )
+            run.overall_reason = f"로컬 턴 평균은 {run.overall_score:.3f}점입니다."
+        if run.error:
+            run.overall_passed = False
+            run.overall_reason = f"부분 실행: {run.error}"[:4000]
         run.average_score = run.overall_score
         session.add(run)
         await session.commit()
@@ -3004,14 +3677,17 @@ async def read_scenario_runs(
     session: SessionDep,
     user: CurrentUser,
     offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=MAX_PAGE_SIZE),
+    limit: int = Query(10, ge=1, le=MAX_PAGE_SIZE),
 ) -> ScenarioRunsPublic:
     scenario = await _scenario_or_404(session, user, scenario_id)
     runs = list(
         (
             await session.exec(
                 select(EvaluationScenarioRun)
-                .where(EvaluationScenarioRun.scenario_id == scenario_id)
+                .where(
+                    EvaluationScenarioRun.scenario_id == scenario_id,
+                    col(EvaluationScenarioRun.comparison_group_id).is_(None),
+                )
                 .order_by(col(EvaluationScenarioRun.created_at).desc())
                 .offset(offset)
                 .limit(limit)
@@ -3039,6 +3715,7 @@ async def read_scenario_runs(
             session,
             EvaluationScenarioRun,
             EvaluationScenarioRun.scenario_id == scenario_id,
+            col(EvaluationScenarioRun.comparison_group_id).is_(None),
         ),
     )
 
@@ -3091,12 +3768,56 @@ async def read_scenario_run(
     )
 
 
+@router.get("/multi-turn/datasets/{scenario_id}/runs/{run_id}/report.html")
+async def download_scenario_run_report(
+    scenario_id: uuid.UUID,
+    run_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+) -> HTMLResponse:
+    result = await read_scenario_run(scenario_id, run_id, session, user)
+
+    def escaped(value: object | None) -> str:
+        return html.escape("" if value is None else str(value), quote=True)
+
+    metric_rows = "".join(
+        "<tr>"
+        f"<td>{escaped(metric.display_name or metric.name)}</td>"
+        f"<td>{metric.score:.3f}점</td>"
+        f"<td>{escaped(metric.weight_percent)}%</td>"
+        f"<td>{escaped(metric.weighted_score)}점</td>"
+        f"<td>{escaped(metric.reason or metric.error)}</td>"
+        "</tr>"
+        for metric in result.metrics
+    )
+    turn_rows = "".join(
+        "<tr>"
+        f"<td>{turn.position + 1} · {escaped(turn.identifier)}</td>"
+        f"<td>{escaped(turn.request_body)}</td>"
+        f"<td>{escaped(turn.expected_output)}</td>"
+        f"<td>{escaped(turn.actual_output)}</td>"
+        f"<td>{turn.score:.3f}점</td>"
+        f"<td>{escaped(turn.reason or turn.error)}</td>"
+        "</tr>"
+        for turn in result.turns
+    )
+    report = f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>멀티턴 평가 리포트</title><style>body{{font-family:system-ui;margin:32px;color:#292524}}table{{width:100%;border-collapse:collapse;margin:16px 0}}th,td{{border:1px solid #ddd;padding:8px;text-align:left;vertical-align:top;white-space:pre-wrap}}.summary{{display:flex;gap:16px;flex-wrap:wrap}}.card{{border:1px solid #ddd;padding:12px;border-radius:8px}}</style></head><body><h1>{escaped(result.scenario_name)} 멀티턴 평가 리포트</h1><div class="summary"><div class="card">종합 {result.overall_score:.3f}점</div><div class="card">{"통과" if result.overall_passed else "실패"}</div><div class="card">턴 {result.passed}/{result.total} 통과</div></div><p>{escaped(result.overall_reason)}</p><h2>프로필 지표</h2><table><thead><tr><th>지표</th><th>평균</th><th>가중치</th><th>기여점수</th><th>한국어 사유</th></tr></thead><tbody>{metric_rows}</tbody></table><h2>턴별 증거</h2><table><thead><tr><th>턴</th><th>요청</th><th>기대 응답</th><th>실제 응답</th><th>점수</th><th>사유</th></tr></thead><tbody>{turn_rows}</tbody></table></body></html>"""
+    return HTMLResponse(
+        content=report,
+        headers={
+            "Content-Disposition": f'attachment; filename="multi-turn-report-{run_id}.html"',
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.post("/run", response_model=EvaluationSummary)
 async def run_evaluation(
     _user: CurrentUser,
     file: UploadFile = File(description="UTF-8 CSV or JSON dataset"),
     framework: Framework = Form(default="local"),
-    threshold: float = Form(default=0.7, ge=0, le=1),
+    threshold: float = Form(default=70, ge=0, le=100),
 ) -> EvaluationSummary:
     if framework != "local":
         raise HTTPException(
@@ -3117,6 +3838,362 @@ async def run_evaluation(
         passed=passed,
         failed=len(evaluated) - passed,
         pass_rate=round(passed / len(evaluated), 4),
-        average_score=round(sum(row.score for row in evaluated) / len(evaluated), 4),
+        average_score=round_score(sum(row.score for row in evaluated) / len(evaluated)),
         rows=evaluated,
     )
+
+
+@router.get(
+    "/multi-turn/datasets/{scenario_id}/turns",
+    response_model=EvaluationScenarioTurnsPublic,
+)
+async def read_scenario_turns(
+    scenario_id: uuid.UUID,
+    session: SessionDep,
+    user: CurrentUser,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=200),
+) -> EvaluationScenarioTurnsPublic:
+    await _scenario_or_404(session, user, scenario_id)
+    condition = EvaluationScenarioTurn.scenario_id == scenario_id
+    statement = (
+        select(EvaluationScenarioTurn)
+        .where(condition)
+        .order_by(col(EvaluationScenarioTurn.position))
+    )
+    turns = list((await session.exec(statement.offset(offset).limit(limit))).all())
+    return EvaluationScenarioTurnsPublic(
+        data=[
+            EvaluationScenarioTurnPublic(
+                id=turn.id,
+                position=turn.position,
+                identifier=turn.identifier,
+                url=turn.url,
+                headers_configured=bool(turn.encrypted_headers),
+                body_template=turn.body_template,
+                response_path=turn.response_path,
+                expected_output=turn.expected_output,
+            )
+            for turn in turns
+        ],
+        count=await _count(session, EvaluationScenarioTurn, condition),
+    )
+
+
+@router.post(
+    "/multi-turn/datasets/{scenario_id}/turns",
+    response_model=EvaluationScenarioTurnPublic,
+)
+async def create_scenario_turn(
+    scenario_id: uuid.UUID,
+    turn_in: EvaluationScenarioTurnCreate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationScenarioTurnPublic:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    endpoint = await _endpoint_or_422(session, scenario.endpoint_id)
+    _reject_sensitive_turn_headers([turn_in], user)
+    duplicate = (
+        await session.exec(
+            select(EvaluationScenarioTurn.id).where(
+                EvaluationScenarioTurn.scenario_id == scenario.id,
+                EvaluationScenarioTurn.identifier == turn_in.identifier,
+            )
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(422, "Each scenario turn identifier must be unique")
+    position = await _count(
+        session,
+        EvaluationScenarioTurn,
+        EvaluationScenarioTurn.scenario_id == scenario.id,
+    )
+    turn = _scenario_turns(scenario.id, [turn_in], endpoint)[0]
+    turn.position = position
+    session.add(turn)
+    await session.commit()
+    await session.refresh(turn)
+    return EvaluationScenarioTurnPublic(
+        id=turn.id,
+        position=turn.position,
+        identifier=turn.identifier,
+        url=turn.url,
+        headers_configured=bool(turn.encrypted_headers),
+        body_template=turn.body_template,
+        response_path=turn.response_path,
+        expected_output=turn.expected_output,
+    )
+
+
+@router.put(
+    "/multi-turn/datasets/{scenario_id}/turns/{turn_id}",
+    response_model=EvaluationScenarioTurnPublic,
+)
+async def update_scenario_turn(
+    scenario_id: uuid.UUID,
+    turn_id: uuid.UUID,
+    turn_in: EvaluationScenarioTurnCreate,
+    session: SessionDep,
+    user: CurrentUser,
+) -> EvaluationScenarioTurnPublic:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    turn = await session.get(EvaluationScenarioTurn, turn_id)
+    if not turn or turn.scenario_id != scenario.id:
+        raise HTTPException(404, "Evaluation scenario turn not found")
+    duplicate = (
+        await session.exec(
+            select(EvaluationScenarioTurn.id).where(
+                EvaluationScenarioTurn.scenario_id == scenario.id,
+                EvaluationScenarioTurn.identifier == turn_in.identifier,
+                EvaluationScenarioTurn.id != turn.id,
+            )
+        )
+    ).first()
+    if duplicate:
+        raise HTTPException(422, "Each scenario turn identifier must be unique")
+    endpoint = await _endpoint_or_422(session, scenario.endpoint_id)
+    _reject_sensitive_turn_headers([turn_in], user)
+    replacement = _scenario_turns(scenario.id, [turn_in], endpoint)[0]
+    turn.identifier, turn.url = replacement.identifier, replacement.url
+    turn.body_template, turn.response_path = (
+        replacement.body_template,
+        replacement.response_path,
+    )
+    turn.expected_output = replacement.expected_output
+    if turn_in.headers:
+        turn.encrypted_headers = replacement.encrypted_headers
+    session.add(turn)
+    await session.commit()
+    await session.refresh(turn)
+    return EvaluationScenarioTurnPublic(
+        id=turn.id,
+        position=turn.position,
+        identifier=turn.identifier,
+        url=turn.url,
+        headers_configured=bool(turn.encrypted_headers),
+        body_template=turn.body_template,
+        response_path=turn.response_path,
+        expected_output=turn.expected_output,
+    )
+
+
+@router.delete("/multi-turn/datasets/{scenario_id}/turns/{turn_id}")
+async def delete_scenario_turn(
+    scenario_id: uuid.UUID, turn_id: uuid.UUID, session: SessionDep, user: CurrentUser
+) -> Message:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    turn = await session.get(EvaluationScenarioTurn, turn_id)
+    if not turn or turn.scenario_id != scenario.id:
+        raise HTTPException(404, "Evaluation scenario turn not found")
+    await session.delete(turn)
+    await session.flush()
+    remaining = list(
+        (
+            await session.exec(
+                select(EvaluationScenarioTurn)
+                .where(EvaluationScenarioTurn.scenario_id == scenario.id)
+                .order_by(col(EvaluationScenarioTurn.position))
+            )
+        ).all()
+    )
+    for position, item in enumerate(remaining):
+        item.position = position
+        session.add(item)
+    await session.commit()
+    return Message(message="Evaluation scenario turn deleted successfully")
+
+
+async def _bulk_owned(
+    session: SessionDep, user: CurrentUser, model: Any, ids: list[uuid.UUID]
+) -> list[Any]:
+    statement = select(model).where(col(model.id).in_(ids))
+    if not user.is_superuser and hasattr(model, "owner_id"):
+        statement = statement.where(model.owner_id == user.id)
+    items = list((await session.exec(statement)).all())
+    if len(items) != len(ids):
+        raise HTTPException(404, "One or more selected resources were not found")
+    return items
+
+
+@router.post("/endpoints/bulk-delete")
+async def bulk_disable_endpoints(
+    request: BulkDeleteRequest, session: SessionDep, _admin: CurrentSuperuser
+) -> Message:
+    endpoints = list(
+        (
+            await session.exec(
+                select(EvaluationEndpoint).where(
+                    col(EvaluationEndpoint.id).in_(request.ids)
+                )
+            )
+        ).all()
+    )
+    if len(endpoints) != len(request.ids):
+        raise HTTPException(404, "One or more endpoints were not found")
+    for endpoint in endpoints:
+        endpoint.is_active = False
+        endpoint.updated_at = get_datetime_utc()
+        session.add(endpoint)
+    await session.commit()
+    return Message(message=f"Disabled {len(endpoints)} evaluation endpoints")
+
+
+@router.post("/single-turn/datasets/bulk-delete")
+async def bulk_delete_datasets(
+    request: BulkDeleteRequest, session: SessionDep, user: CurrentUser
+) -> Message:
+    items = await _bulk_owned(session, user, EvaluationDataset, request.ids)
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} datasets")
+
+
+@router.post("/multi-turn/datasets/bulk-delete")
+async def bulk_delete_scenarios(
+    request: BulkDeleteRequest, session: SessionDep, user: CurrentUser
+) -> Message:
+    items = await _bulk_owned(session, user, EvaluationScenario, request.ids)
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} scenarios")
+
+
+@router.post("/comparisons/bulk-delete")
+async def bulk_delete_comparisons(
+    request: BulkDeleteRequest, session: SessionDep, user: CurrentUser
+) -> Message:
+    items = await _bulk_owned(session, user, EvaluationComparison, request.ids)
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} comparisons")
+
+
+@router.post("/schedules/bulk-delete")
+async def bulk_delete_schedules(
+    request: BulkDeleteRequest, session: SessionDep, user: CurrentUser
+) -> Message:
+    items = await _bulk_owned(session, user, EvaluationSchedule, request.ids)
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} schedules")
+
+
+@router.post("/single-turn/datasets/{dataset_id}/rows/bulk-delete")
+async def bulk_delete_dataset_rows(
+    dataset_id: uuid.UUID,
+    request: BulkDeleteRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> Message:
+    await _dataset_or_404(session, user, dataset_id)
+    items = list(
+        (
+            await session.exec(
+                select(EvaluationDatasetRow).where(
+                    EvaluationDatasetRow.dataset_id == dataset_id,
+                    col(EvaluationDatasetRow.id).in_(request.ids),
+                )
+            )
+        ).all()
+    )
+    if len(items) != len(request.ids):
+        raise HTTPException(404, "One or more dataset rows were not found")
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} dataset rows")
+
+
+@router.post("/single-turn/datasets/{dataset_id}/runs/bulk-delete")
+async def bulk_delete_dataset_runs(
+    dataset_id: uuid.UUID,
+    request: BulkDeleteRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> Message:
+    await _dataset_or_404(session, user, dataset_id)
+    items = list(
+        (
+            await session.exec(
+                select(EvaluationRun).where(
+                    EvaluationRun.dataset_id == dataset_id,
+                    col(EvaluationRun.id).in_(request.ids),
+                )
+            )
+        ).all()
+    )
+    if len(items) != len(request.ids):
+        raise HTTPException(404, "One or more evaluation runs were not found")
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} evaluation runs")
+
+
+@router.post("/multi-turn/datasets/{scenario_id}/turns/bulk-delete")
+async def bulk_delete_scenario_turns(
+    scenario_id: uuid.UUID,
+    request: BulkDeleteRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> Message:
+    scenario = await _scenario_or_404(session, user, scenario_id)
+    items = list(
+        (
+            await session.exec(
+                select(EvaluationScenarioTurn).where(
+                    EvaluationScenarioTurn.scenario_id == scenario.id,
+                    col(EvaluationScenarioTurn.id).in_(request.ids),
+                )
+            )
+        ).all()
+    )
+    if len(items) != len(request.ids):
+        raise HTTPException(404, "One or more scenario turns were not found")
+    for item in items:
+        await session.delete(item)
+    await session.flush()
+    remaining = list(
+        (
+            await session.exec(
+                select(EvaluationScenarioTurn)
+                .where(EvaluationScenarioTurn.scenario_id == scenario.id)
+                .order_by(col(EvaluationScenarioTurn.position))
+            )
+        ).all()
+    )
+    for position, item in enumerate(remaining):
+        item.position = position
+        session.add(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} scenario turns")
+
+
+@router.post("/multi-turn/datasets/{scenario_id}/runs/bulk-delete")
+async def bulk_delete_scenario_runs(
+    scenario_id: uuid.UUID,
+    request: BulkDeleteRequest,
+    session: SessionDep,
+    user: CurrentUser,
+) -> Message:
+    await _scenario_or_404(session, user, scenario_id)
+    items = list(
+        (
+            await session.exec(
+                select(EvaluationScenarioRun).where(
+                    EvaluationScenarioRun.scenario_id == scenario_id,
+                    col(EvaluationScenarioRun.id).in_(request.ids),
+                )
+            )
+        ).all()
+    )
+    if len(items) != len(request.ids):
+        raise HTTPException(404, "One or more scenario runs were not found")
+    for item in items:
+        await session.delete(item)
+    await session.commit()
+    return Message(message=f"Deleted {len(items)} scenario runs")

@@ -1,11 +1,16 @@
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
-from app.models import EvaluationMetricDefinitionCreate, EvaluationMetricType
+from app.models import (
+    EvaluationMetricDefinitionCreate,
+    EvaluationMetricType,
+    EvaluationMode,
+)
 
 
 @dataclass(frozen=True)
@@ -16,6 +21,9 @@ class MetricCatalogDefinition:
     score_direction: str
     uses_llm: bool
     docs_url: str
+    evaluation_mode: EvaluationMode = EvaluationMode.SINGLE_TURN
+    required_config: tuple[str, ...] = ()
+    supports_custom_instruction: bool = False
 
 
 METRIC_CATALOG: dict[EvaluationMetricType, MetricCatalogDefinition] = {
@@ -82,6 +90,7 @@ METRIC_CATALOG: dict[EvaluationMetricType, MetricCatalogDefinition] = {
         "higher_is_better",
         True,
         "https://deepeval.com/docs/metrics-pii-leakage",
+        supports_custom_instruction=True,
     ),
     EvaluationMetricType.EXACT_MATCH: MetricCatalogDefinition(
         "완전 일치",
@@ -91,17 +100,84 @@ METRIC_CATALOG: dict[EvaluationMetricType, MetricCatalogDefinition] = {
         False,
         "https://deepeval.com/docs/metrics-exact-match",
     ),
+    EvaluationMetricType.NON_ADVICE: MetricCatalogDefinition(
+        "비전문 조언 안전성",
+        "허용되지 않은 전문 조언을 제공하지 않는지 평가합니다.",
+        ("input", "actual_output"),
+        "higher_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-non-advice",
+        required_config=("advice_types",),
+        supports_custom_instruction=True,
+    ),
+    EvaluationMetricType.MISUSE: MetricCatalogDefinition(
+        "도메인 오용",
+        "전문 챗봇이 지정 도메인 밖 요청에 응답하는 정도를 평가합니다.",
+        ("input", "actual_output"),
+        "lower_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-misuse",
+        required_config=("domain",),
+        supports_custom_instruction=True,
+    ),
+    EvaluationMetricType.ROLE_VIOLATION: MetricCatalogDefinition(
+        "역할 위반",
+        "지정된 역할이나 페르소나를 위반하는지 평가합니다.",
+        ("input", "actual_output"),
+        "lower_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-role-violation",
+        required_config=("role",),
+        supports_custom_instruction=True,
+    ),
+    EvaluationMetricType.TURN_RELEVANCY: MetricCatalogDefinition(
+        "턴 관련성",
+        "각 어시스턴트 응답이 이전 대화에 관련되는지 평가합니다.",
+        ("turns",),
+        "higher_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-turn-relevancy",
+        EvaluationMode.MULTI_TURN,
+    ),
+    EvaluationMetricType.ROLE_ADHERENCE: MetricCatalogDefinition(
+        "역할 준수",
+        "전체 대화에서 챗봇 역할을 유지하는지 평가합니다.",
+        ("turns", "chatbot_role"),
+        "higher_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-role-adherence",
+        EvaluationMode.MULTI_TURN,
+        ("chatbot_role",),
+    ),
+    EvaluationMetricType.KNOWLEDGE_RETENTION: MetricCatalogDefinition(
+        "지식 유지",
+        "대화 중 도입된 사실을 후속 턴에서 유지하는지 평가합니다.",
+        ("turns",),
+        "higher_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-knowledge-retention",
+        EvaluationMode.MULTI_TURN,
+    ),
+    EvaluationMetricType.CONVERSATION_COMPLETENESS: MetricCatalogDefinition(
+        "대화 완결성",
+        "전체 대화가 사용자 요구를 완결적으로 해결하는지 평가합니다.",
+        ("turns",),
+        "higher_is_better",
+        True,
+        "https://deepeval.com/docs/metrics-conversation-completeness",
+        EvaluationMode.MULTI_TURN,
+    ),
 }
 
 
 class MetricEvaluationResult(BaseModel):
     name: str
     display_name: str
-    score: float = Field(ge=0, le=1)
-    raw_score: float | None = Field(default=None, ge=0, le=1)
+    score: float = Field(ge=0, le=100)
+    raw_score_ratio: float | None = Field(default=None, ge=0, le=1)
     score_direction: str
     weight_percent: int = Field(ge=1, le=100)
-    weighted_score: float = Field(ge=0, le=1)
+    weighted_score: float = Field(ge=0, le=100)
     reason: str | None = None
     error: str | None = None
 
@@ -148,21 +224,21 @@ async def _generate_korean_reasons(reasons: list[str], model_name: str) -> list[
     return _validate_korean_reason_batch(generated, len(reasons))
 
 
-def ensure_korean_reason(
-    reason: str | None, score: float, model_name: str
-) -> str | None:
-    if not _reason_needs_korean(reason):
+def ensure_korean_reason(reason: str | None, score: float, model_name: str) -> str:
+    if reason and not _reason_needs_korean(reason):
         return reason
+    if not reason:
+        return f"이 지표의 평가 사유가 제공되지 않았습니다. 점수는 {score:.2f}점입니다."
     from deepeval.models import GPTModel
 
     try:
         generated, _cost = GPTModel(model=model_name).generate(
-            _korean_reason_prompt([reason]), schema=KoreanReasonBatch
+            _korean_reason_prompt([reason or ""]), schema=KoreanReasonBatch
         )
         return _validate_korean_reason_batch(generated, 1)[0][:2_000]
     except Exception:
         return (
-            f"이 지표의 점수는 {score * 100:.2f}점입니다. "
+            f"이 지표의 점수는 {score:.2f}점입니다. "
             "상세 평가 사유를 한국어로 생성하지 못했습니다."
         )
 
@@ -170,6 +246,13 @@ def ensure_korean_reason(
 async def _localize_metric_reasons(
     results: list[MetricEvaluationResult], model_name: str
 ) -> None:
+    for result in results:
+        if not result.reason:
+            result.reason = (
+                "지표 실행에 실패해 품질 점수를 0점으로 처리했습니다."
+                if result.error
+                else f"이 지표의 평가 사유가 제공되지 않았습니다. 점수는 {result.score:.2f}점입니다."
+            )
     indexes = [
         index
         for index, result in enumerate(results)
@@ -183,7 +266,7 @@ async def _localize_metric_reasons(
     except Exception:
         translated = [
             (
-                f"이 지표의 점수는 {results[index].score * 100:.2f}점입니다. "
+                f"이 지표의 점수는 {results[index].score:.2f}점입니다. "
                 "상세 평가 사유를 한국어로 생성하지 못했습니다."
             )
             for index in indexes
@@ -196,20 +279,94 @@ def catalog_definition(metric_type: EvaluationMetricType) -> MetricCatalogDefini
     return METRIC_CATALOG[metric_type]
 
 
-def _build_metric(metric_type: EvaluationMetricType, model_name: str) -> Any:
+def round_score(value: float | Decimal, *, clamp: bool = True) -> float:
+    """Round product scores at 3 decimal places using decimal ROUND_HALF_UP."""
+    decimal_value = Decimal(str(value)).quantize(
+        Decimal("0.001"), rounding=ROUND_HALF_UP
+    )
+    if clamp:
+        decimal_value = min(Decimal("100"), max(Decimal("0"), decimal_value))
+    return float(decimal_value)
+
+
+def quality_score(raw_ratio: float, score_direction: str) -> float:
+    ratio = Decimal(str(raw_ratio))
+    normalized = Decimal("1") - ratio if score_direction == "lower_is_better" else ratio
+    return round_score(normalized * Decimal("100"))
+
+
+def contribution_score(score: float, weight_percent: int) -> float:
+    return round_score(Decimal(str(score)) * Decimal(weight_percent) / Decimal("100"))
+
+
+def aggregate_score(results: list[MetricEvaluationResult]) -> float:
+    unrounded = sum(
+        Decimal(str(item.score)) * Decimal(item.weight_percent) / Decimal("100")
+        for item in results
+    )
+    return round_score(unrounded)
+
+
+def _instruction_template(base: type, instruction: str) -> type:
+    """Append bounded prose without replacing DeepEval's variables or JSON schema."""
+    text = instruction.strip()[:2000]
+    attrs: dict[str, object] = {}
+    supported_methods = {
+        "NonAdviceTemplate": (
+            "generate_advices",
+            "generate_reason",
+            "generate_verdicts",
+        ),
+        "MisuseTemplate": ("generate_misuses", "generate_reason", "generate_verdicts"),
+        "PIILeakageTemplate": ("extract_pii", "generate_reason", "generate_verdicts"),
+        "RoleViolationTemplate": (
+            "detect_role_violations",
+            "generate_reason",
+            "generate_verdicts",
+        ),
+    }
+    methods = supported_methods.get(base.__name__)
+    if methods is None:
+        raise ValueError("Unsupported DeepEval instruction template")
+    for name in methods:
+        method = getattr(base, name)
+
+        def wrapped(*args: Any, _method: Any = method, **kwargs: Any) -> str:
+            return (
+                f"{_method(*args, **kwargs)}\n\nAdditional judge instruction:\n{text}"
+            )
+
+        attrs[name] = staticmethod(wrapped)
+    return type(f"EvaluationHub{base.__name__}", (base,), attrs)
+
+
+def _build_metric(
+    metric_type: EvaluationMetricType,
+    model_name: str,
+    config: dict[str, Any] | None = None,
+    custom_instruction: str | None = None,
+) -> Any:
     from deepeval.metrics import (
         AnswerRelevancyMetric,
         BiasMetric,
         ExactMatchMetric,
         GEval,
+        MisuseMetric,
+        NonAdviceMetric,
         PIILeakageMetric,
+        RoleViolationMetric,
         SummarizationMetric,
         ToxicityMetric,
     )
     from deepeval.test_case import SingleTurnParams
 
-    common = {"model": model_name, "threshold": None, "include_reason": True}
-    geval_common = {"model": model_name, "threshold": None}
+    common: dict[str, Any] = {
+        "model": model_name,
+        "threshold": None,
+        "include_reason": True,
+    }
+    config = config or {}
+    geval_common: dict[str, Any] = {"model": model_name, "threshold": None}
     if metric_type == EvaluationMetricType.GEVAL_CORRECTNESS:
         return GEval(
             name="Correctness",
@@ -255,7 +412,48 @@ def _build_metric(metric_type: EvaluationMetricType, model_name: str) -> Any:
     if metric_type == EvaluationMetricType.TOXICITY:
         return ToxicityMetric(**common)
     if metric_type == EvaluationMetricType.PII_LEAKAGE:
+        if custom_instruction:
+            from deepeval.metrics.pii_leakage.pii_leakage import PIILeakageTemplate
+
+            common["evaluation_template"] = _instruction_template(
+                PIILeakageTemplate, custom_instruction
+            )
         return PIILeakageMetric(**common)
+    if metric_type == EvaluationMetricType.NON_ADVICE:
+        from deepeval.metrics.non_advice.non_advice import NonAdviceTemplate
+
+        if custom_instruction:
+            common["evaluation_template"] = _instruction_template(
+                NonAdviceTemplate, custom_instruction
+            )
+        advice_types = config.get("advice_types")
+        if not isinstance(advice_types, list) or not all(
+            isinstance(item, str) and item.strip() for item in advice_types
+        ):
+            raise ValueError("non_advice requires non-empty advice_types")
+        return NonAdviceMetric(advice_types=cast(list[str], advice_types), **common)
+    if metric_type == EvaluationMetricType.MISUSE:
+        from deepeval.metrics.misuse.misuse import MisuseTemplate
+
+        if custom_instruction:
+            common["evaluation_template"] = _instruction_template(
+                MisuseTemplate, custom_instruction
+            )
+        domain = config.get("domain")
+        if not isinstance(domain, str) or not domain.strip():
+            raise ValueError("misuse requires a non-empty domain")
+        return MisuseMetric(domain=domain, **common)
+    if metric_type == EvaluationMetricType.ROLE_VIOLATION:
+        from deepeval.metrics.role_violation.role_violation import RoleViolationTemplate
+
+        if custom_instruction:
+            common["evaluation_template"] = _instruction_template(
+                RoleViolationTemplate, custom_instruction
+            )
+        role = config.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("role_violation requires a non-empty role")
+        return RoleViolationMetric(role=role, **common)
     if metric_type == EvaluationMetricType.EXACT_MATCH:
         return ExactMatchMetric(threshold=None)
     raise ValueError(f"Unsupported metric type: {metric_type}")
@@ -277,7 +475,13 @@ async def evaluate_selected_metrics(
         expected_output=expected_output,
     )
     instances = [
-        _build_metric(definition.metric_type, model_name) for definition in metrics
+        _build_metric(
+            definition.metric_type,
+            model_name,
+            definition.config,
+            definition.custom_instruction,
+        )
+        for definition in metrics
     ]
     outcomes: list[object] = []
     for instance in instances:
@@ -294,7 +498,7 @@ async def evaluate_selected_metrics(
                     name=definition.metric_type.value,
                     display_name=catalog.display_name,
                     score=0,
-                    raw_score=None,
+                    raw_score_ratio=None,
                     score_direction=catalog.score_direction,
                     weight_percent=definition.weight_percent,
                     weighted_score=0,
@@ -302,12 +506,8 @@ async def evaluate_selected_metrics(
                 )
             )
             continue
-        raw_score = round(float(instance.score), 4)
-        quality_score = (
-            round(1 - raw_score, 4)
-            if catalog.score_direction == "lower_is_better"
-            else raw_score
-        )
+        raw_score = round(float(instance.score), 6)
+        normalized_score = quality_score(raw_score, catalog.score_direction)
         reason = getattr(instance, "reason", None)
         if not reason and definition.metric_type == EvaluationMetricType.EXACT_MATCH:
             reason = (
@@ -319,15 +519,85 @@ async def evaluate_selected_metrics(
             MetricEvaluationResult(
                 name=definition.metric_type.value,
                 display_name=catalog.display_name,
-                score=quality_score,
-                raw_score=raw_score,
+                score=normalized_score,
+                raw_score_ratio=raw_score,
                 score_direction=catalog.score_direction,
                 weight_percent=definition.weight_percent,
-                weighted_score=round(
-                    quality_score * definition.weight_percent / 100, 4
+                weighted_score=contribution_score(
+                    normalized_score, definition.weight_percent
                 ),
                 reason=reason,
             )
         )
+    await _localize_metric_reasons(results, model_name)
+    return results
+
+
+async def evaluate_conversation_metrics(
+    metrics: list[EvaluationMetricDefinitionCreate],
+    *,
+    turns: list[tuple[str, str]],
+    model_name: str,
+) -> list[MetricEvaluationResult]:
+    from deepeval.metrics import (
+        ConversationCompletenessMetric,
+        KnowledgeRetentionMetric,
+        RoleAdherenceMetric,
+        TurnRelevancyMetric,
+    )
+    from deepeval.test_case import ConversationalTestCase, Turn
+
+    definitions = {
+        EvaluationMetricType.TURN_RELEVANCY: TurnRelevancyMetric,
+        EvaluationMetricType.ROLE_ADHERENCE: RoleAdherenceMetric,
+        EvaluationMetricType.KNOWLEDGE_RETENTION: KnowledgeRetentionMetric,
+        EvaluationMetricType.CONVERSATION_COMPLETENESS: ConversationCompletenessMetric,
+    }
+    test_turns = [
+        Turn(role=cast(Literal["user", "assistant"], role), content=content)
+        for role, content in turns
+    ]
+    results: list[MetricEvaluationResult] = []
+    for definition in metrics:
+        metric_class = definitions.get(definition.metric_type)
+        if metric_class is None:
+            raise ValueError(
+                "single-turn metric cannot be used for a multi-turn evaluation"
+            )
+        test_case = ConversationalTestCase(
+            turns=test_turns,
+            chatbot_role=definition.config.get("chatbot_role"),
+        )
+        metric = metric_class(model=model_name, threshold=None, include_reason=True)
+        catalog = catalog_definition(definition.metric_type)
+        try:
+            await metric.a_measure(test_case)
+            raw_ratio = round(float(metric.score or 0), 6)
+            score = quality_score(raw_ratio, catalog.score_direction)
+            results.append(
+                MetricEvaluationResult(
+                    name=definition.metric_type.value,
+                    display_name=catalog.display_name,
+                    score=score,
+                    raw_score_ratio=raw_ratio,
+                    score_direction=catalog.score_direction,
+                    weight_percent=definition.weight_percent,
+                    weighted_score=contribution_score(score, definition.weight_percent),
+                    reason=getattr(metric, "reason", None),
+                )
+            )
+        except Exception as exc:
+            results.append(
+                MetricEvaluationResult(
+                    name=definition.metric_type.value,
+                    display_name=catalog.display_name,
+                    score=0,
+                    raw_score_ratio=None,
+                    score_direction=catalog.score_direction,
+                    weight_percent=definition.weight_percent,
+                    weighted_score=0,
+                    error=str(exc)[:1000],
+                )
+            )
     await _localize_metric_reasons(results, model_name)
     return results

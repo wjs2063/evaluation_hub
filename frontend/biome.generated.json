@@ -1,0 +1,8 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.6/schema.json",
+  "files": { "includes": ["src/client/**/*"] },
+  "formatter": { "enabled": true, "indentStyle": "space" },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "semicolons": "asNeeded" }
+  }
+}

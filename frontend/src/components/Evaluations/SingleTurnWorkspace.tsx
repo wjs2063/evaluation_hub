@@ -23,6 +23,7 @@ import {
   EvaluationsService,
 } from "@/client"
 import { PageHeader } from "@/components/Common/PageHeader"
+import { ComparisonPanel } from "@/components/Evaluations/ComparisonPanel"
 import {
   EvaluationDetails,
   type EvaluationMetric,
@@ -105,11 +106,11 @@ const emptyForm: FormState = {
   body_template:
     '{\n  "message": "{{input}}",\n  "system_prompt": null,\n  "history": []\n}',
   response_path: "",
-  threshold: 0.7,
+  threshold: 70,
   evaluator: "deepeval",
 }
 
-const RUNS_PER_PAGE = 20
+const RUNS_PER_PAGE = 10
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
 api.interceptors.request.use((config) => {
@@ -160,6 +161,7 @@ export function SingleTurnWorkspace({
     EvaluationMetricProfilePublic[]
   >([])
   const [error, setError] = useState("")
+  const [profileLoadError, setProfileLoadError] = useState("")
   const [isBusy, setIsBusy] = useState(false)
 
   const selected = datasets.find((dataset) => dataset.id === selectedId)
@@ -226,20 +228,29 @@ export function SingleTurnWorkspace({
     api
       .get<{ data: { id: string; name: string; base_url: string }[] }>(
         "/api/v1/evaluations/endpoints",
+        { params: { limit: 200 } },
       )
       .then(({ data }) => setEndpoints(data.data))
       .catch(() => setError("허용된 A 서버 목록을 불러오지 못했습니다."))
   }, [])
 
-  useEffect(() => {
-    EvaluationsService.readMetricProfiles()
-      .then((response) =>
-        setMetricProfiles(
-          response.data.filter((profile) => profile.is_active !== false),
-        ),
+  const loadMetricProfiles = useCallback(async () => {
+    setProfileLoadError("")
+    try {
+      const response = await EvaluationsService.readMetricProfiles({
+        evaluationMode: "single_turn",
+      })
+      setMetricProfiles(
+        response.data.filter((profile) => profile.is_active !== false),
       )
-      .catch(() => setError("평가 프로필 목록을 불러오지 못했습니다."))
+    } catch {
+      setProfileLoadError("평가 프로필 목록을 불러오지 못했습니다.")
+    }
   }, [])
+
+  useEffect(() => {
+    void loadMetricProfiles()
+  }, [loadMetricProfiles])
 
   useEffect(() => {
     if (selectedId) {
@@ -351,6 +362,15 @@ export function SingleTurnWorkspace({
       setError("")
       const { data: queuedJob } = await api.post<EvaluationJob>(
         `/api/v1/evaluations/single-turn/datasets/${selectedId}/run`,
+        undefined,
+        {
+          params: {
+            metric_profile_id:
+              form.evaluator === "deepeval"
+                ? form.metric_profile_id || undefined
+                : undefined,
+          },
+        },
       )
       const job = await waitForJob(queuedJob.id)
       if (job.status !== "succeeded" || !job.run_id) {
@@ -406,7 +426,7 @@ export function SingleTurnWorkspace({
       endpoint_id: endpointId ?? "00000000-0000-0000-0000-000000000000",
       metric_profile_id:
         metricProfileId ?? "00000000-0000-0000-0000-000000000000",
-      threshold: 0.7,
+      threshold: 70,
       evaluator: "deepeval",
       cases: [
         {
@@ -496,6 +516,10 @@ export function SingleTurnWorkspace({
         eyebrow="Evaluation workspace"
         title={title}
         description={description}
+      />
+      <ComparisonPanel
+        evaluationMode="single_turn"
+        targetId={selectedId ?? ""}
       />
       {error && (
         <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
@@ -639,6 +663,23 @@ export function SingleTurnWorkspace({
                       </option>
                     ))}
                   </select>
+                  {profileLoadError ? (
+                    <span className="flex items-center gap-2 text-xs text-destructive">
+                      {profileLoadError}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void loadMetricProfiles()}
+                      >
+                        다시 시도
+                      </Button>
+                    </span>
+                  ) : metricProfiles.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">
+                      활성 단일턴 프로필이 없습니다.
+                    </span>
+                  ) : null}
                 </label>
               )}
               <label className="space-y-2 md:col-span-2">
@@ -843,7 +884,7 @@ export function SingleTurnWorkspace({
                           통과 {savedRun.passed}/{savedRun.total}
                         </Badge>
                         <Badge variant="outline">
-                          점수 {(savedRun.average_score * 100).toFixed(2)}점
+                          점수 {savedRun.average_score.toFixed(3)}점
                         </Badge>
                       </span>
                     </button>

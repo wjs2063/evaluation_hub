@@ -3,7 +3,7 @@ import logging
 import os
 import socket
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, or_, update
 from sqlmodel import col, select
@@ -35,7 +35,8 @@ async def enqueue_dataset_job(
     owner_id: uuid.UUID,
     baseline_run_id: uuid.UUID | None = None,
     schedule_id: uuid.UUID | None = None,
-    scheduled_for=None,
+    metric_profile_id: uuid.UUID | None = None,
+    scheduled_for: datetime | None = None,
 ) -> EvaluationJob:
     due_at = scheduled_for or get_datetime_utc()
     job = EvaluationJob(
@@ -43,6 +44,7 @@ async def enqueue_dataset_job(
         owner_id=owner_id,
         baseline_run_id=baseline_run_id,
         schedule_id=schedule_id,
+        metric_profile_id=metric_profile_id,
         scheduled_for=due_at,
         available_at=due_at,
         max_attempts=settings.EVALUATION_JOB_MAX_ATTEMPTS,
@@ -60,7 +62,8 @@ async def enqueue_scenario_job(
     owner_id: uuid.UUID,
     baseline_run_id: uuid.UUID | None = None,
     schedule_id: uuid.UUID | None = None,
-    scheduled_for=None,
+    metric_profile_id: uuid.UUID | None = None,
+    scheduled_for: datetime | None = None,
 ) -> EvaluationJob:
     due_at = scheduled_for or get_datetime_utc()
     job = EvaluationJob(
@@ -68,6 +71,7 @@ async def enqueue_scenario_job(
         owner_id=owner_id,
         baseline_run_id=baseline_run_id,
         schedule_id=schedule_id,
+        metric_profile_id=metric_profile_id,
         scheduled_for=due_at,
         available_at=due_at,
         max_attempts=settings.EVALUATION_JOB_MAX_ATTEMPTS,
@@ -85,9 +89,9 @@ async def claim_next_job(worker_id: str) -> EvaluationJob | None:
         await session.exec(
             update(EvaluationJob)
             .where(
-                EvaluationJob.status == "running",
-                EvaluationJob.lease_expires_at <= now,
-                EvaluationJob.attempt >= EvaluationJob.max_attempts,
+                col(EvaluationJob.status) == "running",
+                col(EvaluationJob.lease_expires_at) <= now,
+                col(EvaluationJob.attempt) >= col(EvaluationJob.max_attempts),
             )
             .values(
                 status="failed",
@@ -102,13 +106,13 @@ async def claim_next_job(worker_id: str) -> EvaluationJob | None:
             .where(
                 or_(
                     and_(
-                        EvaluationJob.status == "queued",
-                        EvaluationJob.available_at <= now,
+                        col(EvaluationJob.status) == "queued",
+                        col(EvaluationJob.available_at) <= now,
                     ),
                     and_(
-                        EvaluationJob.status == "running",
-                        EvaluationJob.lease_expires_at <= now,
-                        EvaluationJob.attempt < EvaluationJob.max_attempts,
+                        col(EvaluationJob.status) == "running",
+                        col(EvaluationJob.lease_expires_at) <= now,
+                        col(EvaluationJob.attempt) < col(EvaluationJob.max_attempts),
                     ),
                 )
             )
@@ -139,9 +143,9 @@ async def heartbeat_job(job_id: uuid.UUID, worker_id: str) -> bool:
         result = await session.exec(
             update(EvaluationJob)
             .where(
-                EvaluationJob.id == job_id,
-                EvaluationJob.status == "running",
-                EvaluationJob.claimed_by == worker_id,
+                col(EvaluationJob.id) == job_id,
+                col(EvaluationJob.status) == "running",
+                col(EvaluationJob.claimed_by) == worker_id,
             )
             .values(
                 heartbeat_at=now,
@@ -159,9 +163,9 @@ async def complete_job(job_id: uuid.UUID, worker_id: str) -> bool:
         result = await session.exec(
             update(EvaluationJob)
             .where(
-                EvaluationJob.id == job_id,
-                EvaluationJob.status == "running",
-                EvaluationJob.claimed_by == worker_id,
+                col(EvaluationJob.id) == job_id,
+                col(EvaluationJob.status) == "running",
+                col(EvaluationJob.claimed_by) == worker_id,
             )
             .values(
                 status="succeeded",
@@ -185,9 +189,9 @@ async def fail_or_retry_job(job: EvaluationJob, worker_id: str, error: str) -> s
         result = await session.exec(
             update(EvaluationJob)
             .where(
-                EvaluationJob.id == job.id,
-                EvaluationJob.status == "running",
-                EvaluationJob.claimed_by == worker_id,
+                col(EvaluationJob.id) == job.id,
+                col(EvaluationJob.status) == "running",
+                col(EvaluationJob.claimed_by) == worker_id,
             )
             .values(
                 status=next_status,

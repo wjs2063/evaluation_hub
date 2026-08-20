@@ -59,7 +59,7 @@ async def test_typed_dataset_upload_export_and_audit_fields(db: AsyncSession) ->
         "test_type": "single_turn",
         "endpoint_id": str(endpoint.id),
         "metric_profile_id": None,
-        "threshold": 0.7,
+        "threshold": 70,
         "evaluator": "local",
         "cases": [
             {
@@ -106,7 +106,7 @@ async def test_typed_dataset_upload_export_and_audit_fields(db: AsyncSession) ->
         "name": "멀티턴",
         "test_type": "multi_turn",
         "endpoint_id": str(endpoint.id),
-        "threshold": 0.7,
+        "threshold": 70,
         "evaluator": "local",
         "cases": [
             {
@@ -226,7 +226,9 @@ async def test_schedule_list_and_crud_respect_owner_and_admin(
         assert all(
             item.evaluation_type == "single_turn" for item in single_turn_datasets.data
         )
-        assert all(item.test_type == "single_turn" for item in single_turn_datasets.data)
+        assert all(
+            item.test_type == "single_turn" for item in single_turn_datasets.data
+        )
         assert [item.id for item in multi_turn_datasets.data] == [scenario.id]
         assert all(
             item.evaluation_type == "multi_turn" for item in multi_turn_datasets.data

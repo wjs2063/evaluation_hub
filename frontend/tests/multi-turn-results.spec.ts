@@ -8,7 +8,7 @@ const scenario = {
   name: "상담 대화 품질",
   description: "멀티턴 상세 결과 테스트",
   endpoint_id: "endpoint-1",
-  threshold: 0.7,
+  threshold: 70,
   evaluator: "local",
   turn_count: 1,
   turns: [
@@ -119,7 +119,7 @@ test.beforeEach(async ({ page }) => {
       url.pathname ===
       `/api/v1/evaluations/multi-turn/datasets/${scenario.id}/runs`
     ) {
-      expect(url.searchParams.get("limit")).toBe("20")
+      expect(url.searchParams.get("limit")).toBe("10")
       return route.fulfill({ json: { data: [run], count: 21 } })
     }
     return route.fulfill({ json: { data: [], count: 0 } })

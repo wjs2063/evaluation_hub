@@ -3,7 +3,7 @@
 ## Reconfirm the compatibility boundary
 
 - Read `backend/pyproject.toml` and `uv.lock` before changing DeepEval code.
-- Treat the current range `deepeval>=4.1.3,<5.0.0` and locked 4.1.5 API as the present baseline, not a permanent signature guarantee.
+- Treat the range `deepeval>=4.1.8,<4.2.0` and locked 4.1.8 API as the compatibility boundary.
 - Open the official metric document and introspect the installed class constructor, test-case constructor, and `a_measure` immediately before implementation.
 - Run all inspection and tests through `uv run`.
 
@@ -23,7 +23,7 @@
 - Do not hold an `AsyncSession` transaction open while the judge runs.
 - Apply existing concurrency and timeout boundaries to judge execution.
 
-The locked DeepEval 4.1.5 classes documented by this skill expose `a_measure`, including all eleven built-in multi-turn metrics, `GEval`, `DAGMetric`, `ConversationalGEval`, `ConversationalDAGMetric`, and `ArenaGEval`. Reconfirm this after every dependency change.
+The locked DeepEval 4.1.8 classes documented by this skill expose `a_measure`. Reconfirm constructors and async support after every dependency change.
 
 ## Preserve metric-specific outcomes
 
@@ -33,9 +33,9 @@ The locked DeepEval 4.1.5 classes documented by this skill expose `a_measure`, i
 - Derive pass/fail only for metrics whose contract has a threshold and numeric score.
 - Never average heterogeneous metric scores without an explicit, versioned product rule.
 
-## Respect the current schema
+## Respect the metric profile and comparison schema
 
-EvaluationHub currently uses `geval_score` and `geval_reason` for one conversational G-Eval result. Do not pack several metric results into those columns, concatenate reasons, overwrite one metric with another, or create a synthetic average.
+New multi-turn runs use the selected profile's four supported metrics and do not use the legacy 40/60 turn/G-Eval blend. Preserve profile version and configuration snapshots, per-metric score, raw ratio, weight, contribution, reason, and error. Candidate runs linked to a comparison are hidden from ordinary run lists.
 
 When implementing real multi-metric evaluation, update one vertical slice:
 

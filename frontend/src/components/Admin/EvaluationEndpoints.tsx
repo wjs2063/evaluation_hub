@@ -30,6 +30,7 @@ export function EvaluationEndpoints() {
   const load = useCallback(async () => {
     const { data } = await api.get<{ data: Endpoint[] }>(
       "/api/v1/evaluations/endpoints",
+      { params: { limit: 200 } },
     )
     setItems(data.data)
   }, [])

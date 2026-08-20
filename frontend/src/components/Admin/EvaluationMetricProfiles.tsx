@@ -13,6 +13,7 @@ import {
   type EvaluationMetricDefinitionCreate,
   type EvaluationMetricProfilePublic,
   type EvaluationMetricType,
+  type EvaluationMode,
   EvaluationsService,
 } from "@/client"
 import { Badge } from "@/components/ui/badge"
@@ -23,6 +24,7 @@ type ProfileDraft = {
   name: string
   description: string
   is_active: boolean
+  evaluation_mode: EvaluationMode
   metrics: EvaluationMetricDefinitionCreate[]
 }
 
@@ -36,6 +38,7 @@ const emptyDraft = (): ProfileDraft => ({
   name: "새 평가 프로필",
   description: "",
   is_active: true,
+  evaluation_mode: "single_turn",
   metrics: starterMetrics.map((metric) => ({ ...metric })),
 })
 
@@ -43,10 +46,15 @@ const toDraft = (profile: EvaluationMetricProfilePublic): ProfileDraft => ({
   name: profile.name,
   description: profile.description ?? "",
   is_active: profile.is_active ?? true,
-  metrics: (profile.metrics ?? []).map(({ metric_type, weight_percent }) => ({
-    metric_type,
-    weight_percent,
-  })),
+  evaluation_mode: profile.evaluation_mode ?? "single_turn",
+  metrics: (profile.metrics ?? []).map(
+    ({ metric_type, weight_percent, config, custom_instruction }) => ({
+      metric_type,
+      weight_percent,
+      config,
+      custom_instruction,
+    }),
+  ),
 })
 
 const errorMessage = (error: unknown) => {
@@ -76,7 +84,7 @@ export function EvaluationMetricProfiles() {
 
   const load = useCallback(async (requestedId?: string | null) => {
     const [profileResponse, catalogResponse] = await Promise.all([
-      EvaluationsService.readMetricProfiles(),
+      EvaluationsService.readMetricProfiles({ limit: 200 }),
       EvaluationsService.readMetricCatalog(),
     ])
     setProfiles(profileResponse.data)
@@ -108,7 +116,11 @@ export function EvaluationMetricProfiles() {
 
   const addMetric = () => {
     const selected = new Set(draft.metrics.map((metric) => metric.metric_type))
-    const available = catalog.find((item) => !selected.has(item.metric_type))
+    const available = catalog.find(
+      (item) =>
+        item.evaluation_mode === draft.evaluation_mode &&
+        !selected.has(item.metric_type),
+    )
     if (!available) return
     setDraft((current) => ({
       ...current,
@@ -123,10 +135,8 @@ export function EvaluationMetricProfiles() {
     event.preventDefault()
     const types = draft.metrics.map((metric) => metric.metric_type)
     if (!draft.name.trim()) return setError("프로필 이름을 입력하세요.")
-    if (draft.metrics.length < 1 || draft.metrics.length > 5)
-      return setError(
-        "DeepEval 권장 범위에 따라 지표는 1개 이상 5개 이하로 선택하세요.",
-      )
+    if (draft.metrics.length < 1 || draft.metrics.length > 16)
+      return setError("평가지표는 1개 이상 16개 이하로 선택하세요.")
     if (new Set(types).size !== types.length)
       return setError("같은 평가지표를 중복 선택할 수 없습니다.")
     if (weightTotal !== 100)
@@ -138,6 +148,7 @@ export function EvaluationMetricProfiles() {
         name: draft.name.trim(),
         description: draft.description.trim() || null,
         is_active: draft.is_active,
+        evaluation_mode: draft.evaluation_mode,
         metrics: draft.metrics,
       }
       const saved = selectedId
@@ -177,6 +188,48 @@ export function EvaluationMetricProfiles() {
           <Plus /> 새 프로필
         </Button>
       </div>
+      <div
+        className="flex gap-2 border-b px-5 py-3"
+        role="tablist"
+        aria-label="평가 유형"
+      >
+        {(["single_turn", "multi_turn"] as EvaluationMode[]).map((mode) => (
+          <Button
+            key={mode}
+            type="button"
+            role="tab"
+            aria-selected={draft.evaluation_mode === mode}
+            variant={draft.evaluation_mode === mode ? "default" : "outline"}
+            onClick={() => {
+              const next = emptyDraft()
+              next.evaluation_mode = mode
+              next.metrics =
+                mode === "multi_turn"
+                  ? [
+                      { metric_type: "turn_relevancy", weight_percent: 25 },
+                      {
+                        metric_type: "role_adherence",
+                        weight_percent: 25,
+                        config: { chatbot_role: "" },
+                      },
+                      {
+                        metric_type: "knowledge_retention",
+                        weight_percent: 25,
+                      },
+                      {
+                        metric_type: "conversation_completeness",
+                        weight_percent: 25,
+                      },
+                    ]
+                  : starterMetrics.map((metric) => ({ ...metric }))
+              setSelectedId(null)
+              setDraft(next)
+            }}
+          >
+            {mode === "single_turn" ? "단일턴" : "멀티턴"}
+          </Button>
+        ))}
+      </div>
       <div className="grid gap-5 p-5 xl:grid-cols-[280px_minmax(0,1fr)]">
         <div className="space-y-2">
           {profiles.length === 0 && (
@@ -184,28 +237,34 @@ export function EvaluationMetricProfiles() {
               등록된 평가 프로필이 없습니다.
             </p>
           )}
-          {profiles.map((profile) => (
-            <button
-              key={profile.id}
-              type="button"
-              className={`w-full rounded-md border p-3 text-left ${selectedId === profile.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"}`}
-              onClick={() => {
-                setSelectedId(profile.id)
-                setDraft(toDraft(profile))
-                setError("")
-              }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{profile.name}</span>
-                <Badge variant={profile.is_active ? "secondary" : "outline"}>
-                  v{profile.version}
-                </Badge>
-              </div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {(profile.metrics ?? []).length}개 지표
-              </p>
-            </button>
-          ))}
+          {profiles
+            .filter(
+              (profile) =>
+                (profile.evaluation_mode ?? "single_turn") ===
+                draft.evaluation_mode,
+            )
+            .map((profile) => (
+              <button
+                key={profile.id}
+                type="button"
+                className={`w-full rounded-md border p-3 text-left ${selectedId === profile.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"}`}
+                onClick={() => {
+                  setSelectedId(profile.id)
+                  setDraft(toDraft(profile))
+                  setError("")
+                }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{profile.name}</span>
+                  <Badge variant={profile.is_active ? "secondary" : "outline"}>
+                    v{profile.version}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {(profile.metrics ?? []).length}개 지표
+                </p>
+              </button>
+            ))}
         </div>
 
         <form className="min-w-0 space-y-4" onSubmit={save}>
@@ -256,7 +315,7 @@ export function EvaluationMetricProfiles() {
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-medium">평가지표 · 최대 5개</p>
+              <p className="text-sm font-medium">평가지표 · 최대 16개</p>
               <p
                 role="status"
                 aria-label="평가지표 가중치 합계"
@@ -272,7 +331,7 @@ export function EvaluationMetricProfiles() {
               type="button"
               variant="outline"
               disabled={
-                draft.metrics.length >= 5 ||
+                draft.metrics.length >= 16 ||
                 draft.metrics.length >= catalog.length
               }
               onClick={addMetric}
@@ -307,19 +366,24 @@ export function EvaluationMetricProfiles() {
                           })
                         }
                       >
-                        {catalog.map((item) => (
-                          <option
-                            key={item.metric_type}
-                            value={item.metric_type}
-                            disabled={draft.metrics.some(
-                              (other, otherIndex) =>
-                                otherIndex !== index &&
-                                other.metric_type === item.metric_type,
-                            )}
-                          >
-                            {item.display_name}
-                          </option>
-                        ))}
+                        {catalog
+                          .filter(
+                            (item) =>
+                              item.evaluation_mode === draft.evaluation_mode,
+                          )
+                          .map((item) => (
+                            <option
+                              key={item.metric_type}
+                              value={item.metric_type}
+                              disabled={draft.metrics.some(
+                                (other, otherIndex) =>
+                                  otherIndex !== index &&
+                                  other.metric_type === item.metric_type,
+                              )}
+                            >
+                              {item.display_name}
+                            </option>
+                          ))}
                       </select>
                     </label>
                     <label
@@ -370,6 +434,57 @@ export function EvaluationMetricProfiles() {
                           ? "원점수가 낮을수록 좋음"
                           : "점수가 높을수록 좋음"}
                       </p>
+                      {(selected.required_config ?? []).map((configKey) => (
+                        <label
+                          key={configKey}
+                          htmlFor={`metric-${index}-config-${configKey}`}
+                          className="block space-y-1 text-foreground"
+                        >
+                          <span>필수 설정 · {configKey}</span>
+                          <Input
+                            id={`metric-${index}-config-${configKey}`}
+                            aria-label={`${selected.display_name} ${configKey}`}
+                            value={
+                              Array.isArray(metric.config?.[configKey])
+                                ? (
+                                    (metric.config?.[configKey] ??
+                                      []) as unknown[]
+                                  ).join(", ")
+                                : String(metric.config?.[configKey] ?? "")
+                            }
+                            onChange={(event) =>
+                              updateMetric(index, {
+                                config: {
+                                  ...(metric.config ?? {}),
+                                  [configKey]:
+                                    configKey === "advice_types"
+                                      ? event.target.value
+                                          .split(",")
+                                          .map((value) => value.trim())
+                                          .filter(Boolean)
+                                      : event.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                      ))}
+                      {selected.supports_custom_instruction === true && (
+                        <label className="block space-y-1 text-foreground">
+                          <span>안전한 추가 judge 지침 (최대 2,000자)</span>
+                          <textarea
+                            aria-label={`${selected.display_name} 추가 judge 지침`}
+                            className="min-h-20 w-full rounded-md border bg-background p-2"
+                            maxLength={2000}
+                            value={metric.custom_instruction ?? ""}
+                            onChange={(event) =>
+                              updateMetric(index, {
+                                custom_instruction: event.target.value || null,
+                              })
+                            }
+                          />
+                        </label>
+                      )}
                       <a
                         className="text-primary underline-offset-4 hover:underline"
                         href={selected.docs_url}

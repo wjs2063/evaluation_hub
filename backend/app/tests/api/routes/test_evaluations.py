@@ -5,9 +5,9 @@ import os
 import socket
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
-from deepeval.test_case import MultiTurnParams
 from fastapi import HTTPException
 from pydantic import SecretStr
 
@@ -16,14 +16,12 @@ from app.api.routes.evaluations import (
     _assert_url_allowed,
     _call_endpoint,
     _conversation_user_content,
-    _deepeval_conversation,
     _evaluate_live_row,
     _evaluate_row,
     _extract_response,
     _html_report,
     _import_rows,
     _openai_api_key,
-    _overall_conversation_result,
     _replace_variables,
     _request_body,
     _require_deepeval,
@@ -34,8 +32,8 @@ from app.api.routes.evaluations import (
     create_endpoint,
     create_scenario,
     parse_dataset,
-    settings,
 )
+from app.core.config import settings
 from app.core.security import decrypt_evaluation_headers, encrypt_evaluation_headers
 from app.cron_schedule import CronExpressionError, next_cron_run
 from app.evaluation_metrics import METRIC_CATALOG, evaluate_selected_metrics
@@ -71,10 +69,12 @@ def test_single_and_multi_turn_dataset_contracts_are_independent() -> None:
     assert single.evaluation_type == "single_turn"
 
     with pytest.raises(ValueError, match="single_turn"):
-        EvaluationDatasetCreate(
-            name="잘못된 멀티턴 데이터셋",
-            evaluator="local",
-            evaluation_type="multi_turn",
+        EvaluationDatasetCreate.model_validate(
+            {
+                "name": "잘못된 멀티턴 데이터셋",
+                "evaluator": "local",
+                "evaluation_type": "multi_turn",
+            }
         )
 
     paths = {
@@ -196,11 +196,11 @@ def test_schedule_configuration_supports_only_interval_or_cron() -> None:
 def _dynamic_metrics() -> list[EvaluationMetricDefinitionCreate]:
     return [
         EvaluationMetricDefinitionCreate(
-            metric_type="geval_correctness",
+            metric_type=EvaluationMetricType.GEVAL_CORRECTNESS,
             weight_percent=60,
         ),
         EvaluationMetricDefinitionCreate(
-            metric_type="geval_professionalism",
+            metric_type=EvaluationMetricType.GEVAL_PROFESSIONALISM,
             weight_percent=40,
         ),
     ]
@@ -229,7 +229,7 @@ def test_html_report_uses_saved_metric_snapshot_and_escapes_evidence() -> None:
         passed=1,
         failed=0,
         pass_rate=1,
-        average_score=0.82,
+        average_score=82,
         metric_profile_version=3,
     )
     row = EvaluationRunRow(
@@ -237,15 +237,15 @@ def test_html_report_uses_saved_metric_snapshot_and_escapes_evidence() -> None:
         input="<img src=x onerror=alert(1)>",
         expected_output="기대 응답",
         actual_output="실제 응답",
-        score=0.82,
+        score=82,
         passed=True,
         metrics=[
             {
                 "name": "geval_correctness",
                 "display_name": "정확성",
-                "score": 0.82,
+                "score": 82,
                 "weight_percent": 100,
-                "weighted_score": 0.82,
+                "weighted_score": 82,
                 "reason": "필수 조건을 충족했습니다.",
             }
         ],
@@ -291,17 +291,18 @@ def test_metric_profile_requires_catalog_types_and_exact_weights() -> None:
             name="초과된 가중치",
             metrics=[
                 EvaluationMetricDefinitionCreate(
-                    metric_type="geval_correctness", weight_percent=70
+                    metric_type=EvaluationMetricType.GEVAL_CORRECTNESS,
+                    weight_percent=70,
                 ),
                 EvaluationMetricDefinitionCreate(
-                    metric_type="answer_relevancy", weight_percent=40
+                    metric_type=EvaluationMetricType.ANSWER_RELEVANCY,
+                    weight_percent=40,
                 ),
             ],
         )
     with pytest.raises(ValueError, match="Input should be"):
-        EvaluationMetricDefinitionCreate(
-            metric_type="administrator_typo",
-            weight_percent=100,
+        EvaluationMetricDefinitionCreate.model_validate(
+            {"metric_type": "administrator_typo", "weight_percent": 100}
         )
     assert set(METRIC_CATALOG) == set(EvaluationMetricType)
 
@@ -335,7 +336,7 @@ def test_selected_metrics_use_deepeval_and_server_weights(
 
     monkeypatch.setattr(
         "app.evaluation_metrics._build_metric",
-        lambda metric_type, _model: Metric(metric_type),
+        lambda metric_type, *_args: Metric(metric_type),
     )
     monkeypatch.setattr(
         "app.evaluation_metrics._generate_korean_reasons",
@@ -360,7 +361,7 @@ def test_selected_metrics_use_deepeval_and_server_weights(
         "geval_correctness",
         "geval_professionalism",
     ]
-    assert [result.weighted_score for result in results] == [0.54, 0.2]
+    assert [result.weighted_score for result in results] == [54, 20]
     assert [result.reason for result in results] == [
         "공식 지표 판정입니다.",
         "공식 지표 판정입니다.",
@@ -379,13 +380,13 @@ def test_lower_is_better_metric_preserves_raw_score_and_inverts_quality(
 
     monkeypatch.setattr(
         "app.evaluation_metrics._build_metric",
-        lambda _metric_type, _model: Toxicity(),
+        lambda *_args: Toxicity(),
     )
     result = asyncio.run(
         evaluate_selected_metrics(
             [
                 EvaluationMetricDefinitionCreate(
-                    metric_type="toxicity", weight_percent=100
+                    metric_type=EvaluationMetricType.TOXICITY, weight_percent=100
                 )
             ],
             input_text="질문",
@@ -395,9 +396,9 @@ def test_lower_is_better_metric_preserves_raw_score_and_inverts_quality(
         )
     )[0]
 
-    assert result.raw_score == 0.2
-    assert result.score == 0.8
-    assert result.weighted_score == 0.8
+    assert result.raw_score_ratio == 0.2
+    assert result.score == 80
+    assert result.weighted_score == 80
     assert result.score_direction == "lower_is_better"
 
 
@@ -412,11 +413,11 @@ def test_live_row_uses_weighted_composite_score(
                 {
                     "name": "geval_correctness",
                     "display_name": "정확성 (G-Eval)",
-                    "score": 0.9,
-                    "raw_score": 0.9,
+                    "score": 90,
+                    "raw_score_ratio": 0.9,
                     "score_direction": "higher_is_better",
                     "weight_percent": 60,
-                    "weighted_score": 0.54,
+                    "weighted_score": 54,
                     "reason": "정확합니다.",
                     "error": None,
                 },
@@ -427,11 +428,11 @@ def test_live_row_uses_weighted_composite_score(
                 {
                     "name": "geval_professionalism",
                     "display_name": "전문성 (G-Eval)",
-                    "score": 0.5,
-                    "raw_score": 0.5,
+                    "score": 50,
+                    "raw_score_ratio": 0.5,
                     "score_direction": "higher_is_better",
                     "weight_percent": 40,
-                    "weighted_score": 0.2,
+                    "weighted_score": 20,
                     "reason": "보통입니다.",
                     "error": None,
                 },
@@ -445,13 +446,13 @@ def test_live_row_uses_weighted_composite_score(
             "actual",
             "expected",
             0,
-            0.7,
+            70,
             "deepeval",
             _dynamic_metrics(),
         )
     )
 
-    assert result.score == 0.74
+    assert result.score == 74
     assert result.passed is True
     assert [metric.weight_percent for metric in result.metrics] == [60, 40]
 
@@ -475,15 +476,15 @@ def test_run_rows_are_flushed_before_normalized_metric_results() -> None:
         run_row_id=row.id,
         metric_key="geval_correctness",
         display_name="Correctness (G-Eval)",
-        score=0.8,
-        raw_score=0.8,
+        score=80,
+        raw_score_ratio=0.8,
         weight_percent=100,
-        weighted_score=0.8,
+        weighted_score=80,
     )
 
     asyncio.run(
-        _stage_run_evidence(  # type: ignore[arg-type]
-            Session(),
+        _stage_run_evidence(
+            cast(Any, Session()),
             [row],
             [metric],
         )
@@ -511,15 +512,15 @@ def test_exact_match_passes() -> None:
             "expected_output": "hello world",
         },
         index=0,
-        threshold=0.7,
+        threshold=70,
     )
 
     assert result.passed is True
-    assert result.score == 1
+    assert result.score == 100
     assert [metric.reason for metric in result.metrics] == [
         "정규화된 실제 응답과 기대 응답이 일치합니다.",
-        "정규화된 응답의 문자 단위 유사도는 100.00%입니다.",
-        "기대 응답 토큰 2개 중 2개가 실제 응답에 포함되어 있습니다. (포함률 100.00%)",
+        "정규화된 응답의 문자 단위 유사도는 100.00점입니다.",
+        "기대 응답 토큰 2개 중 2개가 실제 응답에 포함되어 있습니다. (점수 100.00점)",
     ]
 
 
@@ -566,7 +567,7 @@ def test_saved_run_preserves_deepeval_reason_with_line_breaks() -> None:
         input="hello",
         expected_output="world",
         actual_output="world",
-        metrics=[{"name": "deepeval_geval", "score": 0.825, "reason": reason}],
+        metrics=[{"name": "deepeval_geval", "score": 82.5, "reason": reason}],
     )
 
     result = _saved_run(run, [row])
@@ -594,36 +595,6 @@ def test_deepeval_reads_api_key_from_settings_env_file(
     assert os.environ["OPENAI_API_KEY"] == "from-dotenv"
 
 
-def test_conversational_deepeval_includes_role_and_content_params(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    class Metric:
-        score = 0.8
-        reason = "대화가 일관되고 자연스럽습니다."
-
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-        def measure(self, _test_case: object) -> None:
-            return None
-
-    monkeypatch.setattr(evaluations, "_require_deepeval", lambda: None)
-    monkeypatch.setattr("deepeval.metrics.ConversationalGEval", Metric)
-
-    score, reason = _deepeval_conversation(
-        [("user", "Hello"), ("assistant", "Hi")], threshold=0.7
-    )
-
-    assert (score, reason) == (0.8, "대화가 일관되고 자연스럽습니다.")
-    assert captured["evaluation_params"] == [
-        MultiTurnParams.ROLE,
-        MultiTurnParams.CONTENT,
-    ]
-    assert "한국어" in str(captured["criteria"])
-
-
 def test_create_local_http_endpoint() -> None:
     class Session:
         def __init__(self) -> None:
@@ -645,8 +616,8 @@ def test_create_local_http_endpoint() -> None:
                 name="Local ChatOpenAI",
                 base_url="http://localhost:9001/chat",
             ),
-            session,  # type: ignore[arg-type]
-            None,  # type: ignore[arg-type]
+            cast(Any, session),
+            cast(Any, None),
         )
     )
 
@@ -728,40 +699,6 @@ def test_conversation_user_content_uses_message_instead_of_raw_json() -> None:
         )
         == "follow up"
     )
-
-
-def test_overall_conversation_result_combines_scores_and_reasons() -> None:
-    score, passed, reason = _overall_conversation_result(
-        turn_average_score=0.8,
-        conversation_score=0.9,
-        conversation_reason="후속 응답이 이전 문맥을 유지했습니다.",
-        threshold=0.7,
-        passed_turns=2,
-        total_turns=2,
-        error=None,
-    )
-
-    assert score == 0.86
-    assert passed is True
-    assert "종합 86.00점" in reason
-    assert "턴별 정확성 80.00점" in reason
-    assert "대화 흐름 90.00점" in reason
-    assert "이전 문맥을 유지" in reason
-
-
-def test_overall_conversation_result_requires_every_quality_gate() -> None:
-    score, passed, _reason = _overall_conversation_result(
-        turn_average_score=0.8,
-        conversation_score=0.6,
-        conversation_reason="두 번째 응답이 첫 턴을 무시했습니다.",
-        threshold=0.7,
-        passed_turns=2,
-        total_turns=2,
-        error=None,
-    )
-
-    assert score == 0.68
-    assert passed is False
 
 
 def test_endpoint_headers_are_encrypted_at_rest() -> None:
@@ -850,17 +787,17 @@ def test_scenario_run_serializes_baseline_turn_comparison() -> None:
         position=0,
         identifier="answer",
         actual_output="before",
-        score=0.4,
+        score=40,
     )
     current = EvaluationScenarioRunTurn(
-        run_id=run.id, position=0, identifier="answer", actual_output="after", score=0.8
+        run_id=run.id, position=0, identifier="answer", actual_output="after", score=80
     )
 
     result = _scenario_run(run, [current], [baseline])
 
     assert result.turns[0].baseline_actual_output == "before"
     assert result.turns[0].output_changed is True
-    assert result.turns[0].score_delta == 0.4
+    assert result.turns[0].score_delta == 40
     assert result.overall_score == run.overall_score
     assert result.conversation_score == run.geval_score
 
@@ -876,7 +813,7 @@ def test_create_scenario_rejects_blank_endpoint_id_with_actionable_message() -> 
     )
 
     with pytest.raises(HTTPException, match="administrator-managed A server") as error:
-        asyncio.run(create_scenario(scenario, None, None))  # type: ignore[arg-type]
+        asyncio.run(create_scenario(scenario, cast(Any, None), cast(Any, None)))
 
     assert error.value.status_code == 422
 
@@ -924,7 +861,7 @@ def test_create_scenario_saves_valid_managed_endpoint(
     session = Session(endpoint)
     user = type("User", (), {"id": uuid.uuid4(), "is_superuser": False})()
 
-    saved = asyncio.run(create_scenario(scenario, session, user))  # type: ignore[arg-type]
+    saved = asyncio.run(create_scenario(scenario, cast(Any, session), cast(Any, user)))
 
     assert saved.endpoint_id == endpoint.id
     assert saved.turn_count == 1

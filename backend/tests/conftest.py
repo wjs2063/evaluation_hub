@@ -7,6 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 from app.core.db import engine, init_db
+from app.core.security import get_password_hash_async
 from app.main import app
 from app.models import Item, User
 from tests.utils.user import authentication_token_from_email
@@ -20,6 +21,19 @@ async def db(anyio_backend: str) -> AsyncGenerator[AsyncSession]:
         existing_item_ids = set((await session.exec(select(Item.id))).all())
         existing_user_ids = set((await session.exec(select(User.id))).all())
         await init_db(session)
+        superuser = (
+            await session.exec(
+                select(User).where(User.email == settings.FIRST_SUPERUSER)
+            )
+        ).one()
+        superuser_id = superuser.id
+        original_superuser_hash = superuser.hashed_password
+        superuser.hashed_password = await get_password_hash_async(
+            settings.FIRST_SUPERUSER_PASSWORD
+        )
+        session.add(superuser)
+        await session.commit()
+        del superuser
         yield session
 
         item_cleanup = delete(Item)
@@ -31,6 +45,11 @@ async def db(anyio_backend: str) -> AsyncGenerator[AsyncSession]:
         if existing_user_ids:
             user_cleanup = user_cleanup.where(col(User.id).not_in(existing_user_ids))
         await session.exec(user_cleanup)
+        if superuser_id in existing_user_ids:
+            persisted_superuser = await session.get(User, superuser_id)
+            if persisted_superuser:
+                persisted_superuser.hashed_password = original_superuser_hash
+                session.add(persisted_superuser)
         await session.commit()
 
 

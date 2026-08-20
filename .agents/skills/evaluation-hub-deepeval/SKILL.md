@@ -12,11 +12,12 @@ Select and integrate DeepEval metrics without changing evaluation meaning or for
 1. Inspect `backend/pyproject.toml`, `uv.lock`, and the installed DeepEval version.
 2. Read the official document linked for every affected metric.
 3. Introspect the installed metric constructor, test-case constructor, and `a_measure` support.
-4. Read `references/multi-turn-metrics.md` for built-in conversational metrics.
-5. Read `references/custom-metrics.md` for `GEval`, DAG, conversational custom metrics, or arena comparisons.
-6. Read `references/evaluationhub-integration.md` before changing EvaluationHub execution, persistence, API, or UI behavior.
+4. Read `references/safety-metrics.md` for any safety metric or custom safety instruction.
+5. Read `references/multi-turn-metrics.md` for built-in conversational metrics.
+6. Read `references/custom-metrics.md` for `GEval`, DAG, conversational custom metrics, or arena comparisons.
+7. Read `references/evaluationhub-integration.md` before changing EvaluationHub execution, persistence, API, or UI behavior.
 
-Do not rely on remembered signatures. The repository currently pins `deepeval>=4.1.3,<5.0.0` and locks 4.1.5, while official documentation can move within 4.1.x.
+Do not rely on remembered signatures. The repository pins `deepeval>=4.1.8,<4.2.0` and locks 4.1.8.
 
 ## Select by evaluation meaning
 
@@ -26,6 +27,14 @@ Do not rely on remembered signatures. The repository currently pins `deepeval>=4
 - Use `ConversationalDAGMetric` for rule-shaped multi-turn decision trees.
 - Use `ArenaGEval` to compare candidates. Preserve its winner and reason; never invent a 0-1 score conversion.
 - Use a built-in multi-turn metric when its documented meaning and required evidence match the product requirement.
+
+## Preserve EvaluationHub metric contracts
+
+- Keep single-turn and multi-turn catalog entries strictly isolated. Multi-turn profiles may contain only Turn Relevancy, Role Adherence, Knowledge Retention, and Conversation Completeness.
+- Normalize quality to 0-100, calculate contribution as `quality_score * weight / 100`, sum unrounded contributions, and apply `ROUND_HALF_UP` at three decimal places. Keep `raw_score_ratio` at 0-1 for audit only.
+- Ensure every persisted reason is Korean through judge instruction, Korean validation/translation, and a fixed Korean fallback.
+- Additional safety instructions are bounded prose injected through safe wrappers around supported default templates; they never replace templates or become executable code.
+- Preserve Arena winners and reasons without inventing quality scores. Single-turn relative comparisons use `ArenaGEval`; conversational pairwise comparison uses blinded order reversal and resolves inconsistent judgments as a tie.
 
 ## Preserve execution and results
 

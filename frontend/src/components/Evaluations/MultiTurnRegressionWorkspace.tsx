@@ -54,7 +54,7 @@ type ScenarioRun = {
   turns?: ScenarioRunTurn[]
 }
 
-const RUNS_PER_PAGE = 20
+const RUNS_PER_PAGE = 10
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL ?? "" })
 api.interceptors.request.use((config) => {
@@ -62,7 +62,7 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-const scorePoints = (score: number) => `${(score * 100).toFixed(2)}점`
+const scorePoints = (score: number) => `${score.toFixed(3)}점`
 
 export function MultiTurnRegressionWorkspace() {
   const { user } = useAuth()
@@ -110,7 +110,9 @@ export function MultiTurnRegressionWorkspace() {
   useEffect(() => {
     Promise.all([
       api.get<{ data: Scenario[] }>("/api/v1/evaluations/multi-turn/datasets"),
-      api.get<{ data: Endpoint[] }>("/api/v1/evaluations/endpoints"),
+      api.get<{ data: Endpoint[] }>("/api/v1/evaluations/endpoints", {
+        params: { limit: 200 },
+      }),
     ])
       .then(([scenarioResult, endpointResult]) => {
         setScenarios(scenarioResult.data.data)
@@ -348,7 +350,7 @@ export function MultiTurnRegressionWorkspace() {
                     >
                       {turn.output_changed ? "응답 변경" : "변경 없음"} ·{" "}
                       {(turn.score_delta ?? 0) > 0 ? "+" : ""}
-                      {((turn.score_delta ?? 0) * 100).toFixed(2)}점
+                      {(turn.score_delta ?? 0).toFixed(3)}점
                     </Badge>
                   </div>
                 )}

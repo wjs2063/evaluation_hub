@@ -5,7 +5,8 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import EmailStr, field_validator, model_validator
-from sqlalchemy import JSON, Column, DateTime
+from sqlalchemy import JSON, Column, DateTime, Numeric
+from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -57,7 +58,7 @@ class User(UserBase, table=True):
     hashed_password: str
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
-        sa_type=DateTime(timezone=True),  # type: ignore
+        sa_column=Column(DateTime(timezone=True)),
     )
     items: list[Item] = Relationship(back_populates="owner", cascade_delete=True)
 
@@ -95,7 +96,7 @@ class Item(ItemBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
-        sa_type=DateTime(timezone=True),  # type: ignore
+        sa_column=Column(DateTime(timezone=True)),
     )
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
@@ -125,21 +126,36 @@ class EvaluationMetricType(StrEnum):
     TOXICITY = "toxicity"
     PII_LEAKAGE = "pii_leakage"
     EXACT_MATCH = "exact_match"
+    NON_ADVICE = "non_advice"
+    MISUSE = "misuse"
+    ROLE_VIOLATION = "role_violation"
+    TURN_RELEVANCY = "turn_relevancy"
+    ROLE_ADHERENCE = "role_adherence"
+    KNOWLEDGE_RETENTION = "knowledge_retention"
+    CONVERSATION_COMPLETENESS = "conversation_completeness"
+
+
+class EvaluationMode(StrEnum):
+    SINGLE_TURN = "single_turn"
+    MULTI_TURN = "multi_turn"
 
 
 class EvaluationMetricDefinitionCreate(SQLModel):
     metric_type: EvaluationMetricType
     weight_percent: int = Field(ge=1, le=100)
+    config: dict[str, Any] = Field(default_factory=dict)
+    custom_instruction: str | None = Field(default=None, max_length=2000)
 
 
 class EvaluationMetricProfileBase(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=500)
     is_active: bool = True
+    evaluation_mode: EvaluationMode = EvaluationMode.SINGLE_TURN
 
 
 class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
-    metrics: list[EvaluationMetricDefinitionCreate] = Field(min_length=1, max_length=5)
+    metrics: list[EvaluationMetricDefinitionCreate] = Field(min_length=1, max_length=16)
 
     @model_validator(mode="after")
     def validate_metric_set(self) -> EvaluationMetricProfileCreate:
@@ -148,6 +164,34 @@ class EvaluationMetricProfileCreate(EvaluationMetricProfileBase):
             raise ValueError("metric keys must be unique within a profile")
         if sum(metric.weight_percent for metric in self.metrics) != 100:
             raise ValueError("metric weights must add up to 100 percent")
+        multi_turn = {
+            EvaluationMetricType.TURN_RELEVANCY,
+            EvaluationMetricType.ROLE_ADHERENCE,
+            EvaluationMetricType.KNOWLEDGE_RETENTION,
+            EvaluationMetricType.CONVERSATION_COMPLETENESS,
+        }
+        expected = (
+            multi_turn
+            if self.evaluation_mode == EvaluationMode.MULTI_TURN
+            else set(EvaluationMetricType) - multi_turn
+        )
+        if any(metric.metric_type not in expected for metric in self.metrics):
+            raise ValueError(
+                "metric evaluation mode must match the profile evaluation mode"
+            )
+        required_config = {
+            EvaluationMetricType.NON_ADVICE: ("advice_types",),
+            EvaluationMetricType.MISUSE: ("domain",),
+            EvaluationMetricType.ROLE_VIOLATION: ("role",),
+            EvaluationMetricType.ROLE_ADHERENCE: ("chatbot_role",),
+        }
+        for metric in self.metrics:
+            for key in required_config.get(metric.metric_type, ()):
+                value = metric.config.get(key)
+                if value is None or value == "" or value == []:
+                    raise ValueError(
+                        f"{metric.metric_type.value} requires config.{key}"
+                    )
         return self
 
 
@@ -156,15 +200,28 @@ class EvaluationMetricProfileUpdate(EvaluationMetricProfileCreate):
 
 
 class EvaluationMetricProfile(EvaluationMetricProfileBase, table=True):
+    evaluation_mode: EvaluationMode = Field(
+        default=EvaluationMode.SINGLE_TURN,
+        sa_column=Column(
+            SAEnum(
+                EvaluationMode,
+                values_callable=lambda enum_type: [item.value for item in enum_type],
+                native_enum=False,
+                create_constraint=False,
+                length=32,
+            ),
+            nullable=False,
+        ),
+    )
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     version: int = Field(default=1, ge=1)
     created_at: datetime = Field(
         default_factory=get_datetime_utc,
-        sa_type=DateTime(timezone=True),  # type: ignore
+        sa_column=Column(DateTime(timezone=True)),
     )
     updated_at: datetime = Field(
         default_factory=get_datetime_utc,
-        sa_type=DateTime(timezone=True),  # type: ignore
+        sa_column=Column(DateTime(timezone=True)),
     )
 
 
@@ -179,6 +236,8 @@ class EvaluationMetricProfileItem(SQLModel, table=True):
     criteria: str = Field(min_length=10, max_length=2000)
     weight_percent: int = Field(ge=1, le=100)
     evaluation_params: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    custom_instruction: str | None = Field(default=None, max_length=2000)
 
 
 class EvaluationMetricDefinitionPublic(EvaluationMetricDefinitionCreate):
@@ -190,6 +249,9 @@ class EvaluationMetricDefinitionPublic(EvaluationMetricDefinitionCreate):
     score_direction: str
     uses_llm: bool
     docs_url: str
+    evaluation_mode: EvaluationMode
+    required_config: list[str]
+    supports_custom_instruction: bool
 
 
 class EvaluationMetricCatalogItem(SQLModel):
@@ -200,6 +262,9 @@ class EvaluationMetricCatalogItem(SQLModel):
     score_direction: str
     uses_llm: bool
     docs_url: str
+    evaluation_mode: EvaluationMode
+    required_config: list[str]
+    supports_custom_instruction: bool
 
 
 class EvaluationMetricCatalogPublic(SQLModel):
@@ -218,6 +283,17 @@ class EvaluationMetricProfilePublic(EvaluationMetricProfileBase):
 class EvaluationMetricProfilesPublic(SQLModel):
     data: list[EvaluationMetricProfilePublic]
     count: int
+
+
+class BulkDeleteRequest(SQLModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+
+    @field_validator("ids")
+    @classmethod
+    def unique_ids(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(value) != len(set(value)):
+            raise ValueError("bulk ids must be unique")
+        return value
 
 
 def validate_actual_output_path(value: str | None) -> str | None:
@@ -256,7 +332,7 @@ class EvaluationDatasetBase(SQLModel):
     headers: dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     body_template: str = Field(default='{"input":"{{input}}"}')
     response_path: str | None = Field(default=None, max_length=500)
-    threshold: float = Field(default=0.7, ge=0, le=1)
+    threshold: float = Field(default=70, ge=0, le=100, sa_type=Numeric)
     evaluator: str = Field(default="deepeval", max_length=32)
 
     @field_validator("evaluation_type")
@@ -323,7 +399,7 @@ class EvaluationDatasetUpdate(SQLModel):
     headers: dict[str, str] | None = None
     body_template: str | None = None
     response_path: str | None = Field(default=None, max_length=500)
-    threshold: float | None = Field(default=None, ge=0, le=1)
+    threshold: float | None = Field(default=None, ge=0, le=100)
     evaluator: str | None = Field(default=None, max_length=32)
 
 
@@ -342,10 +418,10 @@ class EvaluationDataset(EvaluationDatasetBase, table=True):
         default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL"
     )
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     updated_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -382,7 +458,7 @@ class EvaluationDatasetRow(EvaluationDatasetRowCreate, table=True):
         foreign_key="evaluationdataset.id", nullable=False, ondelete="CASCADE"
     )
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -409,7 +485,7 @@ class SingleTurnDatasetDocument(SQLModel):
     test_type: Literal["single_turn"]
     endpoint_id: uuid.UUID
     metric_profile_id: uuid.UUID | None = None
-    threshold: float = Field(default=0.7, ge=0, le=1)
+    threshold: float = Field(default=70, ge=0, le=100)
     evaluator: Literal["deepeval", "local"] = "deepeval"
     cases: list[SingleTurnDatasetCaseDocument] = Field(max_length=1000)
 
@@ -501,16 +577,16 @@ class EvaluationSchedule(SQLModel, table=True):
         default=None, foreign_key="evaluationrun.id", ondelete="SET NULL"
     )
     next_run_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     last_enqueued_at: datetime | None = Field(
-        default=None, sa_type=DateTime(timezone=True)
+        default=None, sa_column=Column(DateTime(timezone=True))
     )
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     updated_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -553,26 +629,35 @@ class EvaluationJob(SQLModel, table=True):
     schedule_id: uuid.UUID | None = Field(
         default=None, foreign_key="evaluationschedule.id", ondelete="SET NULL"
     )
+    metric_profile_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
+    )
     status: str = Field(default="queued", min_length=3, max_length=32)
     scheduled_for: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     available_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     attempt: int = Field(default=0, ge=0)
     max_attempts: int = Field(default=3, ge=1, le=10)
     claimed_by: str | None = Field(default=None, max_length=255)
     lease_expires_at: datetime | None = Field(
-        default=None, sa_type=DateTime(timezone=True)
+        default=None, sa_column=Column(DateTime(timezone=True))
     )
-    heartbeat_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    heartbeat_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
     error: str | None = Field(default=None, max_length=2000)
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
-    started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
-    finished_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+    started_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    finished_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
 
 
 class EvaluationJobPublic(SQLModel):
@@ -581,6 +666,7 @@ class EvaluationJobPublic(SQLModel):
     scenario_id: uuid.UUID | None
     baseline_run_id: uuid.UUID | None
     schedule_id: uuid.UUID | None
+    metric_profile_id: uuid.UUID | None
     status: str
     scheduled_for: datetime
     attempt: int
@@ -615,10 +701,10 @@ class EvaluationEndpoint(EvaluationEndpointBase, table=True):
     # than a plaintext Authorization/API key.
     encrypted_headers: str = Field(default="")
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     updated_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -634,10 +720,113 @@ class EvaluationEndpointsPublic(SQLModel):
     count: int
 
 
+class EvaluationComparisonMode(StrEnum):
+    ABSOLUTE = "absolute"
+    RELATIVE = "relative"
+    HYBRID = "hybrid"
+
+
+class EvaluationComparisonCreate(SQLModel):
+    endpoint_a_id: uuid.UUID
+    endpoint_b_id: uuid.UUID
+    metric_profile_id: uuid.UUID
+    comparison_mode: EvaluationComparisonMode = EvaluationComparisonMode.HYBRID
+
+    @model_validator(mode="after")
+    def endpoints_must_differ(self) -> EvaluationComparisonCreate:
+        if self.endpoint_a_id == self.endpoint_b_id:
+            raise ValueError("comparison endpoints must be different")
+        return self
+
+
+class EvaluationComparison(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    evaluation_mode: str = Field(max_length=32)
+    dataset_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationdataset.id", ondelete="CASCADE"
+    )
+    scenario_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationscenario.id", ondelete="CASCADE"
+    )
+    endpoint_a_id: uuid.UUID = Field(
+        foreign_key="evaluationendpoint.id", nullable=False, ondelete="RESTRICT"
+    )
+    endpoint_b_id: uuid.UUID = Field(
+        foreign_key="evaluationendpoint.id", nullable=False, ondelete="RESTRICT"
+    )
+    metric_profile_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
+    )
+    metric_profile_version: int | None = None
+    metric_profile_snapshot: dict[str, object] | None = Field(
+        default=None, sa_column=Column(JSON)
+    )
+    comparison_mode: str = Field(max_length=16)
+    status: str = Field(default="running", max_length=16)
+    run_a_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationrun.id", ondelete="SET NULL"
+    )
+    run_b_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationrun.id", ondelete="SET NULL"
+    )
+    scenario_run_a_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationscenariorun.id", ondelete="SET NULL"
+    )
+    scenario_run_b_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationscenariorun.id", ondelete="SET NULL"
+    )
+    comparable_count: int = 0
+    winner_a_count: int = 0
+    winner_b_count: int = 0
+    tie_count: int = 0
+    results: list[dict[str, object]] = Field(
+        default_factory=list, sa_column=Column(JSON)
+    )
+    created_at: datetime = Field(
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
+    )
+
+
+class EvaluationComparisonPublic(SQLModel):
+    id: uuid.UUID
+    evaluation_mode: EvaluationMode
+    dataset_id: uuid.UUID | None
+    scenario_id: uuid.UUID | None
+    endpoint_a_id: uuid.UUID
+    endpoint_b_id: uuid.UUID
+    metric_profile_id: uuid.UUID | None
+    metric_profile_version: int | None
+    comparison_mode: EvaluationComparisonMode
+    status: str
+    run_a_id: uuid.UUID | None
+    run_b_id: uuid.UUID | None
+    scenario_run_a_id: uuid.UUID | None
+    scenario_run_b_id: uuid.UUID | None
+    comparable_count: int
+    winner_a_count: int
+    winner_b_count: int
+    tie_count: int
+    results: list[dict[str, object]]
+    created_at: datetime
+
+
+class EvaluationComparisonsPublic(SQLModel):
+    data: list[EvaluationComparisonPublic]
+    count: int
+
+
 class EvaluationDatasetRowPublic(EvaluationDatasetRowCreate):
     id: uuid.UUID
     dataset_id: uuid.UUID
     created_at: datetime
+
+
+class EvaluationDatasetRowsPublic(SQLModel):
+    data: list[EvaluationDatasetRowPublic]
+    count: int
 
 
 class EvaluationRun(SQLModel, table=True):
@@ -655,6 +844,7 @@ class EvaluationRun(SQLModel, table=True):
     job_id: uuid.UUID | None = Field(
         default=None, foreign_key="evaluationjob.id", ondelete="SET NULL"
     )
+    comparison_group_id: uuid.UUID | None = Field(default=None, index=True)
     metric_profile_id: uuid.UUID | None = Field(
         default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
     )
@@ -666,10 +856,10 @@ class EvaluationRun(SQLModel, table=True):
     passed: int = 0
     failed: int = 0
     pass_rate: float = 0
-    average_score: float = 0
+    average_score: float = Field(default=0, sa_type=Numeric)
     geval_available: bool = False
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -686,7 +876,7 @@ class EvaluationRunRow(SQLModel, table=True):
     actual_output: str = ""
     response_status: int | None = None
     response_body: str | None = None
-    score: float = 0
+    score: float | None = Field(default=None, sa_type=Numeric)
     passed: bool = False
     metrics: list[dict[str, object]] = Field(
         default_factory=list, sa_column=Column(JSON)
@@ -701,11 +891,11 @@ class EvaluationRunMetricResult(SQLModel, table=True):
     )
     metric_key: str = Field(min_length=2, max_length=64)
     display_name: str = Field(min_length=1, max_length=100)
-    score: float = Field(ge=0, le=1)
-    raw_score: float | None = Field(default=None, ge=0, le=1)
+    score: float = Field(ge=0, le=100, sa_type=Numeric)
+    raw_score_ratio: float | None = Field(default=None, ge=0, le=1)
     score_direction: str = Field(default="higher_is_better", max_length=32)
     weight_percent: int = Field(ge=1, le=100)
-    weighted_score: float = Field(ge=0, le=1)
+    weighted_score: float = Field(ge=0, le=100, sa_type=Numeric)
     reason: str | None = Field(default=None, max_length=2000)
     error: str | None = Field(default=None, max_length=1000)
 
@@ -716,7 +906,10 @@ class EvaluationScenarioBase(SQLModel):
     endpoint_id: uuid.UUID = Field(
         foreign_key="evaluationendpoint.id", nullable=False, ondelete="RESTRICT"
     )
-    threshold: float = Field(default=0.7, ge=0, le=1)
+    threshold: float = Field(default=70, ge=0, le=100, sa_type=Numeric)
+    metric_profile_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
+    )
     evaluator: str = Field(default="deepeval", max_length=32)
 
 
@@ -757,12 +950,18 @@ class MultiTurnDatasetDocument(SQLModel):
     description: str | None = Field(default=None, max_length=500)
     test_type: Literal["multi_turn"]
     endpoint_id: uuid.UUID
-    threshold: float = Field(default=0.7, ge=0, le=1)
+    threshold: float = Field(default=70, ge=0, le=100)
+    metric_profile_id: uuid.UUID | None = None
     evaluator: Literal["deepeval", "local"] = "deepeval"
     cases: list[MultiTurnDatasetCaseDocument] = Field(min_length=1, max_length=100)
 
 
-class EvaluationScenarioCreate(EvaluationScenarioBase):
+class EvaluationScenarioCreate(SQLModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+    threshold: float = Field(default=70, ge=0, le=100)
+    metric_profile_id: uuid.UUID | None = None
+    evaluator: str = Field(default="deepeval", max_length=32)
     test_type: Literal["multi_turn"] = "multi_turn"
     # Accept an omitted or blank editor value so the route can return the same
     # actionable error used for every missing managed endpoint.
@@ -779,7 +978,8 @@ class EvaluationScenarioUpdate(SQLModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=500)
     endpoint_id: uuid.UUID | None = None
-    threshold: float | None = Field(default=None, ge=0, le=1)
+    threshold: float | None = Field(default=None, ge=0, le=100)
+    metric_profile_id: uuid.UUID | None = None
     evaluator: str | None = Field(default=None, max_length=32)
     turns: list[EvaluationScenarioTurnCreate] | None = Field(
         default=None, max_length=100
@@ -798,10 +998,10 @@ class EvaluationScenario(EvaluationScenarioBase, table=True):
         default=None, foreign_key="user.id", nullable=True, ondelete="SET NULL"
     )
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
     updated_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -830,6 +1030,11 @@ class EvaluationScenarioTurnPublic(SQLModel):
     body_template: str
     response_path: str | None
     expected_output: str
+
+
+class EvaluationScenarioTurnsPublic(SQLModel):
+    data: list[EvaluationScenarioTurnPublic]
+    count: int
 
 
 class EvaluationScenarioPublic(EvaluationScenarioBase):
@@ -866,22 +1071,33 @@ class EvaluationScenarioRun(SQLModel, table=True):
     job_id: uuid.UUID | None = Field(
         default=None, foreign_key="evaluationjob.id", ondelete="SET NULL"
     )
+    comparison_group_id: uuid.UUID | None = Field(default=None, index=True)
+    metric_profile_id: uuid.UUID | None = Field(
+        default=None, foreign_key="evaluationmetricprofile.id", ondelete="SET NULL"
+    )
+    metric_profile_version: int | None = None
+    metric_profile_snapshot: dict[str, object] | None = Field(
+        default=None, sa_column=Column(JSON)
+    )
+    metrics: list[dict[str, object]] = Field(
+        default_factory=list, sa_column=Column(JSON)
+    )
     total: int = 0
     passed: int = 0
     failed: int = 0
-    turn_average_score: float = 0
-    overall_score: float = 0
+    turn_average_score: float = Field(default=0, sa_type=Numeric)
+    overall_score: float = Field(default=0, sa_type=Numeric)
     overall_passed: bool = False
     overall_reason: str | None = None
     # Kept for clients created before the multi-turn result was split into
     # turn, conversation, and overall scores. It mirrors overall_score.
-    average_score: float = 0
+    average_score: float = Field(default=0, sa_type=Numeric)
     evaluator: str = Field(default="deepeval", max_length=32)
-    geval_score: float | None = None
+    geval_score: float | None = Field(default=None, sa_type=Numeric)
     geval_reason: str | None = None
     error: str | None = Field(default=None, max_length=1000)
     created_at: datetime = Field(
-        default_factory=get_datetime_utc, sa_type=DateTime(timezone=True)
+        default_factory=get_datetime_utc, sa_column=Column(DateTime(timezone=True))
     )
 
 
@@ -900,7 +1116,7 @@ class EvaluationScenarioRunTurn(SQLModel, table=True):
     expected_output: str = ""
     response_status: int | None = None
     response_body: str | None = None
-    score: float = 0
+    score: float = Field(default=0, sa_type=Numeric)
     passed: bool = False
     reason: str | None = None
     error: str | None = Field(default=None, max_length=1000)

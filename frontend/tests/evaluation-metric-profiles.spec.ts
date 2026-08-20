@@ -62,6 +62,9 @@ test("admin creates a strongly typed weighted metric profile", async ({
         score_direction: "higher_is_better",
         uses_llm: true,
         docs_url: "https://deepeval.com/docs/metrics-introduction",
+        evaluation_mode: "single_turn",
+        required_config: [],
+        supports_custom_instruction: false,
       })
       return route.fulfill({
         json: {
